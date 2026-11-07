@@ -60,7 +60,7 @@ interface RainDrop {
 const BOOT_LINES = [
   { text: "> SYSTEM INIT...", color: "#22c55e", delay: 0 },
   { text: "> LOADING NEURAL CORE", color: "#22c55e", delay: 600 },
-  { text: "> PIXEL CREW ENGINE V1.0", color: "#818cf8", delay: 1200 },
+  { text: "> PIXEL CREW ENGINE", color: "#818cf8", delay: 1200 },
   { text: "> MULTI-AGENT SOFTWARE DELIVERY", color: "#a1a1aa", delay: 1600 },
   { text: "> OFFICE MODE READY", color: "#f97316", delay: 2000 },
 ];
@@ -225,8 +225,8 @@ export default function OfficeSplash({ onComplete }: { onComplete: () => void })
         // Big pixel title
         const pixelScale = Math.min(4, width / 120);
         const titleColor = `rgba(255, 255, 255, ${titleAlpha})`;
-        drawPixelText(ctx, "OPEN", width / 2, height / 2 - 40, pixelScale, titleColor);
-        drawPixelText(ctx, "OFFICE", width / 2, height / 2 + 10, pixelScale, `rgba(249, 115, 22, ${titleAlpha})`);
+        drawPixelText(ctx, "PIXEL", width / 2, height / 2 - 40, pixelScale, titleColor);
+        drawPixelText(ctx, "CREW", width / 2, height / 2 + 10, pixelScale, `rgba(249, 115, 22, ${titleAlpha})`);
 
         // Decorative line
         ctx.strokeStyle = `rgba(79, 70, 229, ${titleAlpha * 0.6})`;
@@ -243,7 +243,7 @@ export default function OfficeSplash({ onComplete }: { onComplete: () => void })
           ctx.font = "13px monospace";
           ctx.fillStyle = `rgba(170, 170, 170, ${subAlpha})`;
           ctx.textAlign = "center";
-          ctx.fillText("PARALLEL AI AGENTS. ONE WORKSPACE.", width / 2, height / 2 + 76);
+          ctx.fillText("YOU ARE THE BOSS. THE CREW DOES THE WORK.", width / 2, height / 2 + 76);
           ctx.textAlign = "start";
         }
       }
