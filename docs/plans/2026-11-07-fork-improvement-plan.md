@@ -339,6 +339,9 @@ Each task lists its goal, the files involved, the approach, acceptance criteria,
 - *Goal:* Every later phase (dispatcher, queue, handoff) can be tested without spending tokens.
 - *Acceptance:* A scripted Lead→dev→reviewer run passes in CI in under 10 s.
 
+**Follow-ups**
+- **Status: FIXED on branch `fix/no-global-agent-writes` (2026-11-08). Data-loss bug: role packs overwrote the user's `~/.claude/agents/`.** On every non-demo start, `syncAgentDefs()` copied the 18 bundled role packs into the global `~/.claude/agents/` with `writeFileSync` and never checked for an existing file. It destroyed the owner's own `code-reviewer.md` and added the packs to every Claude Code session on the machine. Fix: `syncAgentDefs` is gone, and the gateway writes nothing under `~/.claude/`. At startup it writes the packs as one Claude `--agents` JSON object to `~/.pixel-crew[-dev]/data/claude-agents.json` (atomic). Spawned Claude runs whose role has a pack get `--agents <file> --agent pixel-crew-<pack file name>`; fork-mode attached sessions get no persona, as before. A startup cleanup (`apps/gateway/src/legacy-agent-cleanup.ts`) deletes `~/.claude/agents/<pack>.md` only when it is byte-identical to a pack we shipped (the current file or a known earlier version). It keeps and logs anything else. It is skipped in demo mode and with `PIXEL_CREW_SKIP_LEGACY_CLEANUP=1`. Overwritten user files cannot be recovered by Pixel Crew. The built gateway now ships the packs in `dist/agents/`; before, it could not find them.
+
 ### Phase 1 — MVP: the Boss → Lead → Dev walking flow (about 2–3 weeks)
 
 **P1.1 Work-item model and Dispatcher (L, core).**

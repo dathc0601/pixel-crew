@@ -47,7 +47,7 @@ The gateway can start Claude Code with tools enabled, inside the folders you poi
 - A backend without an auto mode asks you, the Boss, to approve before every run. It never falls back to bypass silently.
 - Bypass (`--dangerously-skip-permissions` and the like) is only possible as an explicit per-backend opt-in in `config.json` (`"backendPermissions": {"claude": "bypass"}`).
 - The Lead runs without tools unless the lead policy allows otherwise. The gateway enforces the policy with CLI flags, not with prompts.
-- The gateway refuses to run as root unless started with `--allow-root`. It never rewrites `~/.claude/settings.json`; the only thing it writes under `~/.claude/` is its role packs, copied into `~/.claude/agents/`.
+- The gateway refuses to run as root unless started with `--allow-root`. It writes nothing under `~/.claude/`: role packs are passed per run with `--agents <file>` from the Pixel Crew data dir. At startup it deletes a role pack copy that an older version left in `~/.claude/agents/`, but only when the file is byte-identical to a pack Pixel Crew shipped. Files with any other content are kept.
 
 ### Out of scope
 

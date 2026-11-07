@@ -30,6 +30,7 @@ Fork of longyangxi/OpenOffice (bit-office), MIT. Workspace packages: `pixel-crew
 - `config.json` — global config (`office` section is zod-validated and hot-reloaded)
 - `data/instances/<id>/` — per-gateway state (logs, sessions, memory)
 - `data/agents.json` — agent definitions
+- `data/claude-agents.json` — role packs as Claude `--agents` JSON, regenerated at startup
 - `projects/` — default agent workspace (team projects created here)
 - `worktrees/<repo-hash>/<agentId>/` — centralized worktree isolation
 
@@ -75,7 +76,7 @@ TASK_DONE includes structured result (changedFiles, diffStat, testResult).
 ## Community and releases (Phase 6)
 - Docs: `README.md` + `README.vi.md` (keep both in step), `CONTRIBUTING.md` (incl. release steps), `SECURITY.md` (threat model, no telemetry), `docs/extending.md`, `docs/adding-a-vendor.md`. Media in `docs/media/` (record from demo mode, never show absolute home paths).
 - Versions: one version for root `package.json` (UI label), `apps/gateway`, `apps/desktop`, `tauri.conf.json`, `Cargo.toml`; owned by release-please (`release-please-config.json`, `.github/workflows/release-please.yml`). Don't bump by hand; commit types drive it. npm publish (`npm-publish.yml`) runs only with an `NPM_TOKEN` secret.
-- Extension points: theme packs (`apps/web/public/themes/`, `parseThemeIndex`/`parsePaletteTheme`, tested), role packs (`packages/orchestrator/agents/*.md`, `parseRolePack`, tested), scene adapters (`scene/SceneAdapter.ts`). Phones fit the map between overlays registered with `useSceneInset` (`scene/sceneInsets.ts`); new floating UI over the canvas should register too.
+- Extension points: theme packs (`apps/web/public/themes/`, `parseThemeIndex`/`parsePaletteTheme`, tested), role packs (`packages/orchestrator/agents/*.md`, `parseRolePack`, tested; passed per run as `--agents <data>/data/claude-agents.json --agent pixel-crew-<slug>`, never written to `~/.claude/`; `apps/gateway/src/legacy-agent-cleanup.ts` removes only byte-identical old copies), scene adapters (`scene/SceneAdapter.ts`). Phones fit the map between overlays registered with `useSceneInset` (`scene/sceneInsets.ts`); new floating UI over the canvas should register too.
 - No telemetry: no analytics, beacons, update checks or third-party requests.
 - v1 is Claude Code only; multi-vendor (Phase 2) is deferred.
 

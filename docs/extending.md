@@ -61,7 +61,7 @@ Code: `apps/web/src/components/office/layout/themes.ts` (`parseThemeIndex`, `par
 
 ## Role packs
 
-A role pack is a [Claude Code subagent](https://docs.claude.com/en/docs/claude-code/sub-agents) profile. At startup the gateway copies the bundled packs into `~/.claude/agents/`. When a hired agent's role title matches a pack's `name`, Pixel Crew runs it with `claude --agent "<name>"`. The role title is the part of the role before ` — `, for example `Code Reviewer` in `Code Reviewer — Code review, bugs, security, quality`.
+A role pack is a [Claude Code subagent](https://code.claude.com/docs/en/sub-agents) profile. At startup the gateway writes the bundled packs as one `--agents` JSON object to `~/.pixel-crew/data/claude-agents.json`; it never writes to `~/.claude/`. When a hired agent's role title matches a pack's `name`, Pixel Crew runs it with `claude -p … --agents <that file> --agent pixel-crew-<slug>`, where `<slug>` is the pack's file name without `.md`. The role title is the part of the role before ` — `, for example `Code Reviewer` in `Code Reviewer — Code review, bugs, security, quality`.
 
 **1. Add** `packages/orchestrator/agents/<slug>.md`:
 
@@ -78,12 +78,15 @@ Keep it short: it is added to every task this agent runs.
 ```
 
 - `name` and `description` are required, on one line each. `name` must be unique across packs.
+- Optional one-line keys: `tools` (comma-separated, e.g. `tools: Read, Grep, Bash`) and `model` (e.g. `model: sonnet`). The markdown body becomes the agent's `prompt`.
 - The pack only takes effect for an agent whose role title is exactly `name`. Hire one with that role, or add an agent definition in `~/.pixel-crew/data/agents.json`. The `AgentDefinition` type is in `packages/shared/src/agent-defs.ts`.
 - The Team Lead never runs with a pack, because its prompt and tool policy come from the daemon (`lead-policy.ts`).
 
 **2. Check it**: `pnpm --filter @pixel-crew/orchestrator test`. The test is `role-packs.test.ts`.
 
-Code: `packages/orchestrator/src/agent-defs.ts` (`parseRolePack`, `listRolePacks`, `syncAgentDefs`).
+Code: `packages/orchestrator/src/agent-defs.ts` (`parseRolePack`, `listRolePacks`, `buildClaudeAgentsConfig`, `writeClaudeAgentsFile`, `resolveRolePackKey`) and `apps/gateway/src/role-packs.ts`.
+
+Older versions copied the packs into `~/.claude/agents/`. At startup the gateway deletes such a copy only if it is byte-identical to a pack Pixel Crew shipped, and keeps (and logs) any file whose content differs. Set `PIXEL_CREW_SKIP_LEGACY_CLEANUP=1` to turn this off (`apps/gateway/src/legacy-agent-cleanup.ts`).
 
 ---
 
