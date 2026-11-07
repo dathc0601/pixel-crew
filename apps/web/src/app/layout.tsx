@@ -5,8 +5,12 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 
 export const metadata: Metadata = {
   title: "Pixel Crew",
-  description: "Control your AI agents from anywhere",
+  description: "A pixel-art office for your AI coding agents",
   manifest: "/manifest.json",
+  icons: {
+    icon: [{ url: "/icons/icon.svg", type: "image/svg+xml" }, { url: "/icons/icon-192.png", sizes: "192x192" }],
+    apple: [{ url: "/icons/icon-192.png", sizes: "192x192" }],
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

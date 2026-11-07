@@ -331,15 +331,28 @@ export interface LoadedTilesetSprites {
   sprites: Map<string, SpriteData>
 }
 
+/**
+ * "Bring your own tileset": the coordinates above map into Donarg's paid
+ * "Office Interior Tileset (16x16)", which must never be redistributed.
+ * The image is only loaded in local development when you own a copy, put it in
+ * apps/web/public/Office Tileset/ (gitignored) and set NEXT_PUBLIC_BYO_TILESET=1.
+ * Production builds compile this branch away, and the web build's strip-unshippable step deletes
+ * the folder from out/ if it is present. See THIRD_PARTY_NOTICES.md.
+ */
+const BYO_TILESET_ENABLED =
+  process.env.NODE_ENV !== 'production' && process.env.NEXT_PUBLIC_BYO_TILESET === '1'
+
 async function loadTilesetFurniture(): Promise<LoadedTilesetSprites> {
   const sprites = new Map<string, SpriteData>()
 
   let img: HTMLImageElement | null = null
-  try {
-    img = await loadImage(`/Office%20Tileset/Office%20Tileset%20All%2016x16.png?v=${Date.now()}`)
-    console.log(`[tileset] loaded ${img.naturalWidth}×${img.naturalHeight}`)
-  } catch {
-    console.warn('[tileset] tileset image not found, using fallback sprites only')
+  if (BYO_TILESET_ENABLED) {
+    try {
+      img = await loadImage(`/Office%20Tileset/Office%20Tileset%20All%2016x16.png?v=${Date.now()}`)
+      console.log(`[tileset] loaded local BYO tileset ${img.naturalWidth}×${img.naturalHeight}`)
+    } catch {
+      console.warn('[tileset] BYO tileset image not found, using fallback sprites only')
+    }
   }
 
   for (const entry of TILESET_FURNITURE) {

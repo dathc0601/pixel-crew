@@ -1,3 +1,5 @@
+// Adapted from pixel-agents v1.0.2 (https://github.com/pablodelucca/pixel-agents),
+// Copyright (c) 2026 Pablo De Lucca, MIT License. See THIRD_PARTY_NOTICES.md.
 import type { Direction, SpriteData, FloorColor } from '../types'
 import { Direction as Dir } from '../types'
 import { adjustSprite } from '../colorize'

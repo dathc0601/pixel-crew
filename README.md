@@ -147,9 +147,13 @@ pixel-crew/
 
 Issues and PRs are welcome. If you're exploring AI-native dev tooling, workflows, or interfaces, Pixel Crew is a great playground for experiments.
 
-## Acknowledgments
+## Credits
 
-Pixel office art inspired by [pixel-agents](https://github.com/pablodelucca/pixel-agents) by [@pablodelucca](https://github.com/pablodelucca).
+- Fork of [longyangxi/OpenOffice](https://github.com/longyangxi/OpenOffice) (formerly "bit-office"), MIT.
+- The pixel office (character and wall sprites, sprite data, default layout and the Canvas 2D engine) is derived from [pixel-agents](https://github.com/pablodelucca/pixel-agents) by Pablo De Lucca, MIT.
+- Character sprites are based on JIK-A-4's [Metro City](https://jik-a-4.itch.io/metrocity-free-topdown-character-pack) pack, CC0.
+
+Full license texts and the list of assets that are deliberately not shipped are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## License
 

@@ -51,6 +51,7 @@ export default function OfficeSwitcher({ isOpen, onClose, onSelect, currentOffic
   const [loading, setLoading] = useState(false)
   const [loadingId, setLoadingId] = useState<string | null>(null)
   const [hovered, setHovered] = useState<string | null>(null)
+  const [indexMissing, setIndexMissing] = useState(false)
 
   useEffect(() => {
     if (!isOpen) return
@@ -59,8 +60,11 @@ export default function OfficeSwitcher({ isOpen, onClose, onSelect, currentOffic
     ;(async () => {
       try {
         const res = await fetch(`${OFFICES_BASE}/index.json`)
+        // No themes ship by default (see apps/web/assets-quarantine/README.md)
+        if (!res.ok) { if (!cancelled) setIndexMissing(true); return }
         const data: OfficeEntry[] = await res.json()
         if (cancelled) return
+        setIndexMissing(false)
         setOffices(data.map((e) => ({ ...e })))
 
         // Extract thumbnails from zips in parallel
@@ -187,7 +191,7 @@ export default function OfficeSwitcher({ isOpen, onClose, onSelect, currentOffic
         >
           {offices.length === 0 && (
             <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: 13, padding: 20, textAlign: 'center', gridColumn: '1 / -1' }}>
-              Loading...
+              {indexMissing ? 'No office themes installed. Using the default pixel office.' : 'Loading...'}
             </div>
           )}
           {offices.map((entry) => {

@@ -12,7 +12,7 @@
   "scripts": {
     "dev": "NODE_ENV=development WS_PORT=9099 tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "build": "tsc --noEmit && tsup && rm -rf dist/web && cp -r ../web/out dist/web",
+    "build": "tsc --noEmit && tsup && node scripts/copy-web.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test --test-concurrency=1 \"src/__tests__/*.test.ts\""
   },
