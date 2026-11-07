@@ -3,7 +3,7 @@ import { wsChannel, setPairCode, sendToClient, revokeAllSessions } from "./ws-se
 import { generatePairCode } from "./security.js";
 import { ablyChannel } from "./ably-client.js";
 import { telegramChannel, setTelegramAgentDefs, syncTelegramHiredAgents } from "./telegram-channel.js";
-import { config, CONFIG_DIR, hasSetupRun, reloadConfig, saveConfig } from "./config.js";
+import { config, CONFIG_DIR, hasSetupRun, reloadConfig, saveConfig, officeConfig } from "./config.js";
 import { runSetup } from "./setup.js";
 import { detectBackends, getBackend, getAllBackends } from "./backends.js";
 import { createOrchestrator, getMergeHistory, previewServer, recordProjectRatings, parseAgentOutput, setSessionDir, setStorageRoot, syncAgentDefs, type Orchestrator, type OrchestratorEvent, type RuntimeOwnerInfo, type TeamPhaseChangedEvent } from "@pixel-crew/orchestrator";
@@ -1522,6 +1522,10 @@ async function main() {
   // Generate and display pair code
   showPairCode();
 
+  // Hot-reload the office section of config.json (permissions, lead policy, hand-off timing)
+  officeConfig.watch();
+  if (officeConfig.error) console.warn(`[Gateway] Office config has errors, using defaults: ${officeConfig.error}`);
+
   // Start transports (WS + optional Ably)
   await initTransports(handleCommand);
 
@@ -1569,6 +1573,7 @@ function cleanup() {
   try { persistTeamState(); } catch { /* ignore */ }
   outputReader?.detachAll();
   scanner?.stop();
+  officeConfig.close();
   previewServer.shutdown();
   stopTunnel();
   orc?.destroy();

@@ -5,6 +5,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { execSync } from "child_process";
 import { randomBytes } from "crypto";
 import { migrateLegacyDataDir } from "./data-dir.js";
+import { OfficeConfigManager } from "./office-config.js";
+import type { OfficeConfig } from "@pixel-crew/shared";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -19,7 +21,7 @@ if (migration.status === "migrated") {
 export const CONFIG_DIR = migration.dataDir;
 // Orchestrator and memory packages resolve the data dir on their own; point them at the same place.
 if (!process.env.PIXEL_CREW_HOME) process.env.PIXEL_CREW_HOME = CONFIG_DIR;
-const CONFIG_FILE = resolve(CONFIG_DIR, "config.json");
+export const CONFIG_FILE = resolve(CONFIG_DIR, "config.json");
 
 
 interface SavedConfig {
@@ -214,4 +216,16 @@ export const config = buildConfig();
 export function reloadConfig() {
   const fresh = buildConfig();
   Object.assign(config, fresh);
+  officeConfig?.reload();
+}
+
+/**
+ * The zod-validated "office" section of config.json (permissions, lead policy, hand-off timing).
+ * Hot-reloaded once main() calls officeConfig.watch(); read it at the point of use.
+ */
+export const officeConfig = new OfficeConfigManager(CONFIG_FILE);
+officeConfig.reload();
+
+export function getOfficeConfig(): OfficeConfig {
+  return officeConfig.get();
 }
