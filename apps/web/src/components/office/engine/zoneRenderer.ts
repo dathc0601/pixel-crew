@@ -88,26 +88,34 @@ export function zoneLabelDrawables(
   offsetX: number,
   offsetY: number,
   zoom: number,
-): Array<{ zY: number; draw: (ctx: CanvasRenderingContext2D) => void }> {
+): Array<{ zY: number; draw: (ctx: CanvasRenderingContext2D) => void; box: { x0: number; y0: number; x1: number; y1: number } }> {
   if (!layout.zones) return []
   const size = Math.max(7, Math.round(5.5 * zoom))
   const font = `bold ${size}px monospace`
   const shadow = Math.max(1, Math.round(zoom / 2))
-  return zoneLabelSpots(layout).map((spot) => ({
-    zY: spot.y - TILE_SIZE / 2 + 0.25,
-    draw: (ctx: CanvasRenderingContext2D) => {
-      const x = Math.round(offsetX + spot.x * zoom)
-      const y = Math.round(offsetY + spot.y * zoom)
-      const text = ZONE_LABELS[spot.kind]
-      ctx.save()
-      ctx.font = font
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.3)'
-      ctx.fillText(text, x + shadow, y + shadow)
-      ctx.fillStyle = 'rgba(255, 248, 230, 0.62)'
-      ctx.fillText(text, x, y)
-      ctx.restore()
-    },
-  }))
+  return zoneLabelSpots(layout).map((spot) => {
+    const cx = Math.round(offsetX + spot.x * zoom)
+    const cy = Math.round(offsetY + spot.y * zoom)
+    // Generous: monospace glyphs are about 0.6 em wide; the shadow sits down-right
+    const halfW = ZONE_LABELS[spot.kind].length * size * 0.75 + shadow + 2
+    const halfH = size + shadow + 2
+    return {
+      zY: spot.y - TILE_SIZE / 2 + 0.25,
+      box: { x0: cx - halfW, y0: cy - halfH, x1: cx + halfW, y1: cy + halfH },
+      draw: (ctx: CanvasRenderingContext2D) => {
+        const x = Math.round(offsetX + spot.x * zoom)
+        const y = Math.round(offsetY + spot.y * zoom)
+        const text = ZONE_LABELS[spot.kind]
+        ctx.save()
+        ctx.font = font
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.3)'
+        ctx.fillText(text, x + shadow, y + shadow)
+        ctx.fillStyle = 'rgba(255, 248, 230, 0.62)'
+        ctx.fillText(text, x, y)
+        ctx.restore()
+      },
+    }
+  })
 }

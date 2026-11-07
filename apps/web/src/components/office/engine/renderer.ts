@@ -7,6 +7,7 @@ import { getBossSprites } from '../sprites/bossLook'
 import { renderZoneTint, zoneLabelDrawables } from './zoneRenderer'
 import type { OfficeLayout } from '../types'
 import { renderMatrixEffect } from './matrixEffect'
+import { renderWithStaticLayer, staticCacheEnabled } from './staticLayer'
 import { renderBossFlowOverlays, type BossFlowOverlays } from './bossFlowRenderer'
 import { getColorizedFloorSprite, hasFloorSprites, WALL_COLOR } from '../floorTiles'
 import { hasWallSprites, getWallInstances, wallColorToHex } from '../wallTiles'
@@ -76,15 +77,21 @@ export function renderTileGrid(
   zoom: number,
   tileColors?: Array<FloorColor | null>,
   cols?: number,
+  /** Only the tiles that touch this screen area (CSS px); omit for all of them */
+  area?: Box,
 ): void {
   const s = TILE_SIZE * zoom
   const useSpriteFloors = hasFloorSprites()
   const tmRows = tileMap.length
   const tmCols = tmRows > 0 ? tileMap[0].length : 0
   const layoutCols = cols ?? tmCols
+  const r0 = area ? Math.max(0, Math.floor((area.y0 - offsetY) / s) - 1) : 0
+  const r1 = area ? Math.min(tmRows, Math.ceil((area.y1 - offsetY) / s) + 1) : tmRows
+  const c0 = area ? Math.max(0, Math.floor((area.x0 - offsetX) / s) - 1) : 0
+  const c1 = area ? Math.min(tmCols, Math.ceil((area.x1 - offsetX) / s) + 1) : tmCols
 
-  for (let r = 0; r < tmRows; r++) {
-    for (let c = 0; c < tmCols; c++) {
+  for (let r = r0; r < r1; r++) {
+    for (let c = c0; c < c1; c++) {
       const tile = tileMap[r][c]
 
       if (tile === TileType.VOID) continue
@@ -115,14 +122,35 @@ export function renderTileGrid(
   }
 }
 
-interface ZDrawable {
+export interface ZDrawable {
   zY: number
   draw: (ctx: CanvasRenderingContext2D) => void
+  /** Screen-space bounds (CSS px) covering every pixel draw() may touch; used by the static layer */
+  box?: Box
 }
 
-export function renderScene(
-  ctx: CanvasRenderingContext2D,
-  furniture: FurnitureInstance[],
+export interface Box { x0: number; y0: number; x1: number; y1: number }
+
+/** Walls and furniture as z-sorted drawables. */
+export function furnitureDrawables(furniture: FurnitureInstance[], offsetX: number, offsetY: number, zoom: number): ZDrawable[] {
+  const out: ZDrawable[] = []
+  for (const f of furniture) {
+    const cached = getCachedSprite(f.sprite, zoom)
+    const fx = offsetX + f.x * zoom
+    const fy = offsetY + f.y * zoom
+    out.push({
+      zY: f.zY,
+      draw: (c) => {
+        c.drawImage(cached, fx, fy)
+      },
+      box: { x0: fx, y0: fy, x1: fx + cached.width, y1: fy + cached.height },
+    })
+  }
+  return out
+}
+
+/** Characters (with their hover/selection outline and spawn effect) as z-sorted drawables. */
+export function characterDrawables(
   characters: Character[],
   offsetX: number,
   offsetY: number,
@@ -130,25 +158,9 @@ export function renderScene(
   selectedAgentId: number | null,
   hoveredAgentId: number | null,
   characterScale = 1,
-  extra?: ZDrawable[],
-): void {
-  const drawables: ZDrawable[] = extra ? [...extra] : []
+): ZDrawable[] {
+  const drawables: ZDrawable[] = []
   const charZoom = zoom * characterScale
-
-  // Furniture
-  for (const f of furniture) {
-    const cached = getCachedSprite(f.sprite, zoom)
-    const fx = offsetX + f.x * zoom
-    const fy = offsetY + f.y * zoom
-    drawables.push({
-      zY: f.zY,
-      draw: (c) => {
-        c.drawImage(cached, fx, fy)
-      },
-    })
-  }
-
-  // Characters
   for (const ch of characters) {
     const sprites = ch.isBoss ? getBossSprites(ch.palette) : getCharacterSprites(ch.palette, ch.hueShift)
     const spriteData = getCharacterSprite(ch, sprites)
@@ -159,6 +171,9 @@ export function renderScene(
     const sittingOffset = ch.state === CharacterState.TYPE ? CHARACTER_SITTING_OFFSET_PX + lean : 0
     const drawX = Math.round(offsetX + ch.x * zoom - cached.width / 2)
     const drawY = Math.round(offsetY + (ch.y + sittingOffset) * zoom - cached.height)
+    // The outline is one sprite pixel wider on each side; the spawn effect stays inside the sprite
+    const pad = Math.ceil(charZoom) + 1
+    const box = { x0: drawX - pad, y0: drawY - pad, x1: drawX + cached.width + pad, y1: drawY + cached.height + pad }
 
     const charZY = ch.y + TILE_SIZE / 2 + CHARACTER_Z_SORT_OFFSET
 
@@ -173,6 +188,7 @@ export function renderScene(
         draw: (c) => {
           renderMatrixEffect(c, mCh, mSpriteData, mDrawX, mDrawY, charZoom)
         },
+        box,
       })
       continue
     }
@@ -194,6 +210,7 @@ export function renderScene(
           c.drawImage(outlineCached, olDrawX, olDrawY)
           c.restore()
         },
+        box,
       })
     }
 
@@ -202,10 +219,31 @@ export function renderScene(
       draw: (c) => {
         c.drawImage(cached, drawX, drawY)
       },
+      box,
     })
   }
+  return drawables
+}
 
-  // Sort by Y (lower = in front = drawn later)
+export function renderScene(
+  ctx: CanvasRenderingContext2D,
+  furniture: FurnitureInstance[],
+  characters: Character[],
+  offsetX: number,
+  offsetY: number,
+  zoom: number,
+  selectedAgentId: number | null,
+  hoveredAgentId: number | null,
+  characterScale = 1,
+  extra?: ZDrawable[],
+): void {
+  const drawables: ZDrawable[] = [
+    ...(extra ?? []),
+    ...furnitureDrawables(furniture, offsetX, offsetY, zoom),
+    ...characterDrawables(characters, offsetX, offsetY, zoom, selectedAgentId, hoveredAgentId, characterScale),
+  ]
+
+  // Sort by Y (lower = in front = drawn later); the sort is stable, so ties keep this order
   drawables.sort((a, b) => a.zY - b.zY)
 
   for (const d of drawables) {
@@ -648,32 +686,42 @@ export function renderFrame(
   const offsetX = Math.floor((canvasWidth - mapW) / 2) + Math.round(panX)
   const offsetY = Math.floor((canvasHeight - mapH) / 2) + Math.round(panY)
 
-  // Draw background image if available (from room ZIP import)
-  if (backgroundImage) {
-    ctx.save()
-    ctx.imageSmoothingEnabled = false
-    ctx.drawImage(backgroundImage, offsetX, offsetY, mapW, mapH)
-    ctx.restore()
+  const paintFloor = (c: CanvasRenderingContext2D, area?: Box) => {
+    // Background image (from room ZIP import) replaces the tile floor
+    if (backgroundImage) {
+      c.save()
+      c.imageSmoothingEnabled = false
+      c.drawImage(backgroundImage, offsetX, offsetY, mapW, mapH)
+      c.restore()
+      return
+    }
+    renderTileGrid(c, tileMap, offsetX, offsetY, zoom, tileColors, layoutCols, area)
+  }
+  // Walls, furniture and room names (walls come from the background image when there is one)
+  const staticItems = (): ZDrawable[] => {
+    const wallInstances = !backgroundImage && hasWallSprites()
+      ? getWallInstances(tileMap, tileColors, layoutCols)
+      : []
+    const labels = zoneLayout && !backgroundImage ? zoneLabelDrawables(zoneLayout, offsetX, offsetY, zoom) : []
+    return [...labels, ...furnitureDrawables(wallInstances.length > 0 ? [...wallInstances, ...furniture] : furniture, offsetX, offsetY, zoom)]
   }
 
-  // Draw tiles (skip floor rendering when background image is present)
-  if (!backgroundImage) {
-    renderTileGrid(ctx, tileMap, offsetX, offsetY, zoom, tileColors, layoutCols)
+  // Outside the editor the static scene comes from a cached layer (P4.2); only the
+  // characters' areas are redrawn each frame
+  const cached = !editor && staticCacheEnabled() && renderWithStaticLayer(
+    ctx,
+    [tileMap, furniture, tileColors, layoutCols, backgroundImage, zoneLayout, zoom, offsetX, offsetY, hasFloorSprites(), hasWallSprites()],
+    paintFloor,
+    staticItems,
+    characterDrawables(characters, offsetX, offsetY, zoom, selectedAgentId, hoveredAgentId, charScale),
+  )
+  if (!cached) {
+    paintFloor(ctx)
     // Zone tint while editing (room names are z-sorted with the scene below)
-    if (zoneLayout && editor) renderZoneTint(ctx, zoneLayout, offsetX, offsetY, zoom)
+    if (zoneLayout && editor && !backgroundImage) renderZoneTint(ctx, zoneLayout, offsetX, offsetY, zoom)
+    const items = staticItems()
+    renderScene(ctx, [], characters, offsetX, offsetY, zoom, selectedAgentId, hoveredAgentId, charScale, items)
   }
-
-  // Build wall instances for z-sorting (skip when background image provides wall visuals)
-  const wallInstances = !backgroundImage && hasWallSprites()
-    ? getWallInstances(tileMap, tileColors, layoutCols)
-    : []
-  const allFurniture = wallInstances.length > 0
-    ? [...wallInstances, ...furniture]
-    : furniture
-
-  // Draw walls + furniture + characters (z-sorted)
-  const labels = zoneLayout && !backgroundImage ? zoneLabelDrawables(zoneLayout, offsetX, offsetY, zoom) : undefined
-  renderScene(ctx, allFurniture, characters, offsetX, offsetY, zoom, selectedAgentId, hoveredAgentId, charScale, labels)
 
   // Boss crown, hand-off papers, queue board, subagent cue
   if (bossFlow) renderBossFlowOverlays(ctx, characters, offsetX, offsetY, zoom, charScale, bossFlow)

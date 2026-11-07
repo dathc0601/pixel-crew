@@ -329,6 +329,8 @@ export default function PixelOfficeScene({
     const { stop, wake } = loop;
     wakeRef.current = wake;
     officeState.onDirty = wake;
+    // Perf checks: window.__pixelCrewDebug.staticCache = false, then redraw(), draws frames in full
+    window.__pixelCrewDebug = { ...window.__pixelCrewDebug, redraw: () => { officeState.dirty = true; wake(); } };
 
     // Create adapter and notify parent
     const adapter = new PixelSceneAdapter(officeState, stop, wake, loop.isPaused);
