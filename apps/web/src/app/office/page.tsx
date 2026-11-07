@@ -32,6 +32,7 @@ import { useConfirm } from "@/components/office/ui/useConfirm";
 
 // Dynamic imports for extracted components
 import dynamic from "next/dynamic";
+import { requestSceneRefit, useSceneInset } from "@/components/office/scene/sceneInsets";
 const PixelOfficeScene = dynamic(() => import("@/components/office/scene/PixelOfficeScene"), { ssr: false });
 const EditorToolbar = dynamic(() => import("@/components/office/editor/EditorToolbar"), { ssr: false });
 const ZoomControls = dynamic(() => import("@/components/office/ui/ZoomControls"), { ssr: false });
@@ -430,6 +431,7 @@ export default function OfficePage() {
     const mapH = layout.rows * TILE_SIZE;
     zoomRef.current = Math.max(ZOOM_MIN, Math.min(viewW / mapW, viewH / mapH, ZOOM_MAX));
     panRef.current = { x: 0, y: 0 };
+    requestSceneRefit(); // phones refit into the band between the overlays
   }, [zoomRef, panRef]);
 
   const handleImportRoomZip = useCallback((layout: import('@/components/office/types').OfficeLayout, backgroundImage: HTMLImageElement | null) => {
@@ -994,6 +996,8 @@ export default function OfficePage() {
 
   // Responsive: detect mobile
   const [isMobile, setIsMobile] = useState(false);
+  const statusBarInsetRef = useSceneInset("top");
+  const agentBarInsetRef = useSceneInset("bottom");
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 768px)");
     setIsMobile(mq.matches);
@@ -1294,7 +1298,7 @@ export default function OfficePage() {
         <LoadingOverlay visible={!assetsReady} />
 
         {/* Top-left status bar */}
-        <div style={{
+        <div ref={statusBarInsetRef} style={{
           position: "absolute", top: 0, left: 0, right: 0, zIndex: 10,
           padding: "10px 16px", display: "flex", alignItems: "center", gap: 12,
           background: "linear-gradient(to bottom, var(--term-bg) 0%, transparent 100%)",
@@ -2073,7 +2077,7 @@ export default function OfficePage() {
 
       {/* ── Mobile: bottom agent bar ── */}
       {isMobile && agentList.length > 0 && !isChatExpanded && !mobileTeamOpen && (
-        <div style={{
+        <div ref={agentBarInsetRef} style={{
           position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 20,
           padding: "8px 12px",
           display: "flex", alignItems: "center", gap: 8,

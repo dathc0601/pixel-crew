@@ -15,10 +15,13 @@ import { getFurnitureAtTile } from "../editor/editorActions";
 import type { SceneComponentProps } from "./SceneAdapter";
 import { PixelSceneAdapter } from "./PixelSceneAdapter";
 import { BOSS_AGENT_ID } from "@pixel-crew/shared/client";
+import { measureSceneInsets, onSceneInsetsChange, type SceneInsets } from "./sceneInsets";
 
 /** Views this narrow (phones) never shrink the map below NARROW_MIN_ZOOM; they pan instead */
 const NARROW_VIEW_PX = 600;
 const NARROW_MIN_ZOOM = 1.4;
+/** Phones fill the free band between the overlays, but never zoom in further than this */
+const NARROW_MAX_ZOOM = 3;
 
 export interface PixelOfficeSceneProps extends SceneComponentProps {
   editMode: boolean;
@@ -90,9 +93,13 @@ export default function PixelOfficeScene({
   /** Wake the game loop from sleep on user interaction */
   const wakeRef = useRef<(() => void) | null>(null);
 
+  /** Overlays (status bar, Boss shortcuts, agent bar) covering the canvas; phones only */
+  const insetsRef = useRef<SceneInsets>({ top: 0, bottom: 0 });
+
   /**
-   * Zoom so the map fills the viewport (contain fit). Phones get at least a readable zoom
-   * instead (characters and tap targets stay big enough) and pan sideways to see the rest.
+   * Zoom so the map fills the viewport (contain fit). Phones fit the map's height into the
+   * band between the overlays instead (at least a readable zoom, so characters and tap
+   * targets stay big enough) and pan sideways to see the rest.
    */
   const calcFitZoom = useCallback((viewW: number, viewH: number) => {
     const office = officeStateRef.current;
@@ -101,27 +108,39 @@ export default function PixelOfficeScene({
     const mapH = office.layout.rows * TILE_SIZE;
     const contain = Math.min(viewW / mapW, viewH / mapH);
     if (viewW <= NARROW_VIEW_PX && contain < NARROW_MIN_ZOOM) {
-      return Math.max(ZOOM_MIN, Math.min(NARROW_MIN_ZOOM, viewH / mapH));
+      const band = viewH - insetsRef.current.top - insetsRef.current.bottom;
+      return Math.max(ZOOM_MIN, Math.min(NARROW_MAX_ZOOM, Math.max(NARROW_MIN_ZOOM, band / mapH)));
     }
     return Math.max(ZOOM_MIN, contain);
   }, [officeStateRef]);
 
-  /** Keep a panned map covering the viewport (pan only exists when the map overflows it). */
+  /**
+   * Keep a panned map covering the visible band (pan only exists when the map overflows it).
+   * The renderer centers the map in the canvas; with overlays the band's center is shifted
+   * by (top - bottom) / 2, so a map that fits the band sits in its middle, not behind them.
+   */
   const clampPan = useCallback((x: number, y: number) => {
     const canvas = canvasRef.current;
     const office = officeStateRef.current;
     if (!canvas || !office) return { x: 0, y: 0 };
     const zoom = zoomRef.current;
+    const { top, bottom } = insetsRef.current;
+    const band = canvas.clientHeight - top - bottom;
+    const centerY = (top - bottom) / 2;
     const overX = Math.max(0, (office.layout.cols * TILE_SIZE * zoom - canvas.clientWidth) / 2);
-    const overY = Math.max(0, (office.layout.rows * TILE_SIZE * zoom - canvas.clientHeight) / 2);
-    return { x: Math.max(-overX, Math.min(overX, x)), y: Math.max(-overY, Math.min(overY, y)) };
+    const overY = Math.max(0, (office.layout.rows * TILE_SIZE * zoom - band) / 2);
+    return {
+      x: Math.max(-overX, Math.min(overX, x)),
+      y: Math.max(centerY - overY, Math.min(centerY + overY, y)),
+    };
   }, [officeStateRef, zoomRef]);
 
   /** Dragging pans when PAN_ENABLED, or whenever the map is bigger than the view (phones). */
   const canPan = useCallback(() => {
     if (PAN_ENABLED) return true;
-    const p = clampPan(Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
-    return p.x > 0 || p.y > 0;
+    const lo = clampPan(-Number.MAX_SAFE_INTEGER, -Number.MAX_SAFE_INTEGER);
+    const hi = clampPan(Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
+    return hi.x > lo.x || hi.y > lo.y;
   }, [clampPan]);
 
   // Resize handler
@@ -141,10 +160,17 @@ export default function PixelOfficeScene({
     if (ctx) {
       ctx.scale(dpr, dpr);
     }
-    // Auto-fit zoom — renderer already centers the map, so reset pan to origin. A map wider
-    // than a phone screen starts at its left edge, where the Boss's room is.
+    // Phones keep the map out from under the overlays (desktop sizes the container instead)
+    if (w <= NARROW_VIEW_PX) {
+      const r = canvas.getBoundingClientRect();
+      insetsRef.current = measureSceneInsets({ top: r.top, bottom: r.top + h, height: h });
+    } else {
+      insetsRef.current = { top: 0, bottom: 0 };
+    }
+    // Auto-fit zoom — renderer centers the map and clampPan shifts it into the free band.
+    // A map wider than a phone screen starts at its top-left, where the Boss's room is.
     zoomRef.current = calcFitZoom(w, h);
-    panRef.current = clampPan(Number.MAX_SAFE_INTEGER, 0);
+    panRef.current = clampPan(Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
   }, [calcFitZoom, clampPan, zoomRef, panRef]);
 
   // Load assets on mount
@@ -186,6 +212,13 @@ export default function PixelOfficeScene({
     resizeCanvas();
     const ro = new ResizeObserver(() => resizeCanvas());
     if (canvas.parentElement) ro.observe(canvas.parentElement);
+    // Overlays appearing or resizing (e.g. the agent bar after the first hire) refit phones
+    const offInsets = onSceneInsetsChange(() => {
+      if (canvas.clientWidth > NARROW_VIEW_PX) return;
+      resizeCanvas();
+      officeState.dirty = true; // resizing cleared the canvas
+      wakeRef.current?.();
+    });
 
     // Start game loop
     const dpr = window.devicePixelRatio || 1;
@@ -340,6 +373,7 @@ export default function PixelOfficeScene({
       adapter.dispose();
       officeStateRef.current = null;
       ro.disconnect();
+      offInsets();
     };
   }, [assetsLoaded, resizeCanvas, officeStateRef, zoomRef, panRef, editorRef, onAdapterReady]);
 

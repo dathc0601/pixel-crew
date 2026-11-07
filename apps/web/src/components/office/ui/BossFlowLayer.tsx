@@ -11,6 +11,7 @@ import { heldWorkItems, queuedWorkItems, useBossFlowStore } from "@/store/boss-f
 import { useOfficeStore } from "@/store/office-store";
 import type { SceneAdapter, SceneObjectId } from "../scene/SceneAdapter";
 import { useBossFlowBridge } from "../bossflow/useBossFlowBridge";
+import { useSceneInset } from "../scene/sceneInsets";
 import TermButton from "./primitives/TermButton";
 import ApprovalsTray from "./ApprovalsTray";
 import { TERM_PANEL, TERM_BORDER, TERM_TEXT, TERM_DIM, TERM_SEM_YELLOW } from "./termTheme";
@@ -33,6 +34,7 @@ export default function BossFlowLayer({ adapter, isOwner }: { adapter: SceneAdap
   const queuedCount = useMemo(() => queuedWorkItems(workItems).length, [workItems]);
   const held = useMemo(() => heldWorkItems(workItems), [workItems]);
 
+  const chipsInsetRef = useSceneInset("bottom");
   const [composerOpen, setComposerOpen] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -65,7 +67,7 @@ export default function BossFlowLayer({ adapter, isOwner }: { adapter: SceneAdap
   return (
     <>
       {/* Boss-flow shortcuts: work without opening a side panel */}
-      <div className="pc-bossflow-chips" style={{ position: "fixed", bottom: "calc(64px + env(safe-area-inset-bottom))", left: 12, zIndex: 40, display: "flex", gap: 6, alignItems: "flex-start" }}>
+      <div ref={chipsInsetRef} className="pc-bossflow-chips" style={{ position: "fixed", bottom: "calc(64px + env(safe-area-inset-bottom))", left: 12, zIndex: 40, display: "flex", gap: 6, alignItems: "flex-start" }}>
         {demo && (
           <div
             role="status"
