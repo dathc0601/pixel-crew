@@ -1,7 +1,9 @@
-import { TileType, FurnitureType, TILE_SIZE, Direction, DEFAULT_COLS, DEFAULT_ROWS } from '../types'
-import type { TileType as TileTypeVal, OfficeLayout, PlacedFurniture, Seat, FurnitureInstance, FloorColor } from '../types'
+import { TILE_SIZE, Direction } from '../types'
+import type { TileType as TileTypeVal, OfficeLayout, PlacedFurniture, Seat, FurnitureInstance, FloorColor, ZoneKind } from '../types'
 import { getCatalogEntry } from './furnitureCatalog'
 import { getColorizedSprite } from '../colorize'
+import { createOfficeLayout } from './defaultOffice'
+import { sanitizeZones } from './zones'
 
 // Migration color constants (used when old layouts lack tileColors)
 const CONF_ROOM_COLOR: FloorColor = { h: 210, s: 20, b: 22, c: 0 }
@@ -138,19 +140,26 @@ export function isBossFurniture(uid: string): boolean {
   return uid.startsWith('boss')
 }
 
-export function layoutToSeats(furniture: PlacedFurniture[]): Map<string, Seat> {
+export function layoutToSeats(
+  furniture: PlacedFurniture[],
+  zoneOf?: (col: number, row: number) => ZoneKind | null,
+): Map<string, Seat> {
   const seats = new Map<string, Seat>()
+  const zoneProps = (col: number, row: number): Partial<Seat> => {
+    const zone = zoneOf?.(col, row) ?? null
+    return zone ? { zone, ...(zone === 'boss_room' ? { isBoss: true } : {}) } : {}
+  }
 
-  // Collect all desk tiles → desk item uid
-  const deskTiles = new Map<string, PlacedFurniture>()
+  // Desks, each with all of its footprint tiles
+  const desks: Array<{ item: PlacedFurniture; tiles: Array<[number, number]> }> = []
   for (const item of furniture) {
     const entry = getCatalogEntry(item.type)
     if (!entry || !entry.isDesk) continue
+    const tiles: Array<[number, number]> = []
     for (let dr = 0; dr < entry.footprintH; dr++) {
-      for (let dc = 0; dc < entry.footprintW; dc++) {
-        deskTiles.set(`${item.col + dc},${item.row + dr}`, item)
-      }
+      for (let dc = 0; dc < entry.footprintW; dc++) tiles.push([item.col + dc, item.row + dr])
     }
+    desks.push({ item, tiles })
   }
 
   // Collect all chair tiles with their orientation
@@ -173,33 +182,28 @@ export function layoutToSeats(furniture: PlacedFurniture[]): Map<string, Seat> {
   // (furniture sprites often span multiple cells between D and C)
   const SEARCH_RADIUS = 3
 
-  // For each desk, find the nearest chair within radius to create work seats
+  // For each desk, the nearest free chair next to any of its tiles becomes its work seat
   const usedChairs = new Set<string>()
-  const processedDesks = new Set<string>()
 
-  for (const [deskKey, deskItem] of deskTiles) {
-    if (processedDesks.has(deskItem.uid)) continue
-    const [dColStr, dRowStr] = deskKey.split(',')
-    const dCol = parseInt(dColStr)
-    const dRow = parseInt(dRowStr)
-
-    // Find nearest chair within radius (search closest first)
-    let bestChair: { key: string; item: PlacedFurniture; facing: Direction; facingDesk: Direction; dist: number } | null = null
-    for (let dist = 1; dist <= SEARCH_RADIUS; dist++) {
-      if (bestChair) break
-      const candidates: Array<{ dc: number; dr: number; facingDesk: Direction }> = [
-        { dc: 0, dr: -dist, facingDesk: Direction.DOWN },
-        { dc: 0, dr: dist, facingDesk: Direction.UP },
-        { dc: -dist, dr: 0, facingDesk: Direction.RIGHT },
-        { dc: dist, dr: 0, facingDesk: Direction.LEFT },
-      ]
-      for (const d of candidates) {
-        const chairKey = `${dCol + d.dc},${dRow + d.dr}`
-        const chair = chairTiles.get(chairKey)
-        if (chair && !usedChairs.has(chairKey)) {
-          bestChair = { key: chairKey, item: chair.item, facing: chair.facing, facingDesk: d.facingDesk, dist }
-          break
+  for (const { item: deskItem, tiles } of desks) {
+    let bestChair: { key: string; item: PlacedFurniture; facingDesk: Direction } | null = null
+    for (let dist = 1; dist <= SEARCH_RADIUS && !bestChair; dist++) {
+      for (const [dCol, dRow] of tiles) {
+        const candidates: Array<{ dc: number; dr: number; facingDesk: Direction }> = [
+          { dc: 0, dr: -dist, facingDesk: Direction.DOWN },
+          { dc: 0, dr: dist, facingDesk: Direction.UP },
+          { dc: -dist, dr: 0, facingDesk: Direction.RIGHT },
+          { dc: dist, dr: 0, facingDesk: Direction.LEFT },
+        ]
+        for (const d of candidates) {
+          const chairKey = `${dCol + d.dc},${dRow + d.dr}`
+          const chair = chairTiles.get(chairKey)
+          if (chair && !usedChairs.has(chairKey)) {
+            bestChair = { key: chairKey, item: chair.item, facingDesk: d.facingDesk }
+            break
+          }
         }
+        if (bestChair) break
       }
     }
 
@@ -212,18 +216,20 @@ export function layoutToSeats(furniture: PlacedFurniture[]): Map<string, Seat> {
         facingDir: bestChair.facingDesk,
         assigned: false,
         ...(isBossFurniture(bestChair.item.uid) ? { isBoss: true } : {}),
+        ...zoneProps(bestChair.item.col, bestChair.item.row),
       })
     } else {
       // Desk with no nearby chair → standing work seat at desk position
+      const [dCol, dRow] = tiles[0]
       seats.set(deskItem.uid, {
         uid: deskItem.uid,
         seatCol: dCol,
         seatRow: dRow,
         facingDir: Direction.DOWN,
         assigned: false,
+        ...zoneProps(dCol, dRow),
       })
     }
-    processedDesks.add(deskItem.uid)
   }
 
   // Generate rest seats for chairs NOT matched to any desk (e.g. sofas)
@@ -236,81 +242,16 @@ export function layoutToSeats(furniture: PlacedFurniture[]): Map<string, Seat> {
       facingDir: chair.facing,
       assigned: false,
       isRest: true,
+      ...(zoneOf?.(chair.item.col, chair.item.row) ? { zone: zoneOf(chair.item.col, chair.item.row)! } : {}),
     })
   }
 
   return seats
 }
 
-/**
- * Simple fallback layout used when Level 4 JSON fails to load.
- * Uses only hardcoded furniture types (no tileset dependency).
- */
+/** The built-in floor plan (Boss room, Lead area, dev desks, pantry): layout/defaultOffice.ts */
 export function createDefaultLayout(): OfficeLayout {
-  const COLS = DEFAULT_COLS
-  const ROWS = DEFAULT_ROWS
-  const W = TileType.WALL
-  const F = TileType.FLOOR_1
-  const V = TileType.VOID
-
-  const tiles: TileTypeVal[] = []
-  const tileColors: Array<FloorColor | null> = []
-  const defaultColor: FloorColor = { h: 195, s: 10, b: 18, c: 0 }
-
-  for (let r = 0; r < ROWS; r++) {
-    for (let c = 0; c < COLS; c++) {
-      const isEdge = r === 0 || r === ROWS - 1 || c === 0 || c === COLS - 1
-      const tile = isEdge ? W : F
-      tiles.push(tile)
-      tileColors.push(tile === F ? defaultColor : null)
-    }
-  }
-
-  // Boss office (P1.5): bottom-right corner, walled off with a door on its left wall.
-  // Interior cols 14-19, rows 14-19; wall along row 13 and col 13; door at (13, 17).
-  const BOSS_WALL_ROW = 13
-  const BOSS_WALL_COL = 13
-  const BOSS_DOOR_ROW = 17
-  const bossFloor: FloorColor = { h: 25, s: 45, b: 8, c: 0 }
-  for (let r = BOSS_WALL_ROW; r < ROWS - 1; r++) {
-    for (let c = BOSS_WALL_COL; c < COLS - 1; c++) {
-      const idx = r * COLS + c
-      const isWall = r === BOSS_WALL_ROW || (c === BOSS_WALL_COL && r !== BOSS_DOOR_ROW)
-      tiles[idx] = isWall ? W : F
-      tileColors[idx] = isWall ? null : bossFloor
-    }
-  }
-
-  // Generate desks + chairs in a grid pattern
-  // Desk (2x2) at (col, row), chair (1x1) at (col, row+2)
-  // Columns: 3, 7, 11, 15 — Rows: 2, 6, 10, 14 (the desk at 15,14 is the Boss's)
-  const furniture: PlacedFurniture[] = []
-  let deskIdx = 0
-  const deskCols = [3, 7, 11, 15]
-  const deskRows = [2, 6, 10, 14]
-  for (const row of deskRows) {
-    for (const col of deskCols) {
-      if (col === 15 && row === 14) continue
-      deskIdx++
-      furniture.push({ uid: `desk-${deskIdx}`, type: FurnitureType.DESK, col, row })
-      furniture.push({ uid: `ch-${deskIdx}`, type: FurnitureType.CHAIR, col, row: row + 2 })
-    }
-  }
-  furniture.push({ uid: 'boss-desk', type: FurnitureType.DESK, col: 16, row: 14 })
-  furniture.push({ uid: 'boss-chair', type: FurnitureType.CHAIR, col: 16, row: 16 })
-  furniture.push({ uid: 'boss-lamp', type: FurnitureType.LAMP, col: 14, row: 14 })
-  furniture.push({ uid: 'boss-shelf', type: FurnitureType.BOOKSHELF, col: 19, row: 14 })
-  // Decor along walls
-  furniture.push({ uid: 'plant-1',  type: FurnitureType.PLANT, col: 1, row: 1 })
-  furniture.push({ uid: 'plant-2',  type: FurnitureType.PLANT, col: 19, row: 1 })
-  furniture.push({ uid: 'plant-3',  type: FurnitureType.PLANT, col: 1, row: 19 })
-  furniture.push({ uid: 'plant-4',  type: FurnitureType.PLANT, col: 19, row: 19 })
-  furniture.push({ uid: 'shelf-1',  type: FurnitureType.BOOKSHELF, col: 1, row: 9 })
-  furniture.push({ uid: 'shelf-2',  type: FurnitureType.BOOKSHELF, col: 19, row: 9 })
-  furniture.push({ uid: 'cooler-1', type: FurnitureType.COOLER, col: 10, row: 19 })
-  furniture.push({ uid: 'wb-1',     type: FurnitureType.WHITEBOARD, col: 9, row: 1 })
-
-  return { version: 1, cols: COLS, rows: ROWS, tiles, tileColors, furniture }
+  return createOfficeLayout()
 }
 
 /** Serialize layout to JSON string */
@@ -322,7 +263,7 @@ export function serializeLayout(layout: OfficeLayout): string {
 export function deserializeLayout(json: string): OfficeLayout | null {
   try {
     const obj = JSON.parse(json)
-    if (obj && obj.version === 1 && Array.isArray(obj.tiles) && Array.isArray(obj.furniture)) {
+    if (obj && (obj.version === 1 || obj.version === 2) && Array.isArray(obj.tiles) && Array.isArray(obj.furniture)) {
       return migrateLayout(obj as OfficeLayout)
     }
   } catch { /* ignore parse errors */ }
@@ -334,7 +275,9 @@ export function migrateLayoutColors(layout: OfficeLayout): OfficeLayout {
   return migrateLayout(layout)
 }
 
-function migrateLayout(layout: OfficeLayout): OfficeLayout {
+function migrateLayout(input: OfficeLayout): OfficeLayout {
+  // v1 files have no zone map; v2 files may carry one (dropped when malformed)
+  const layout = sanitizeZones(input)
   if (layout.tileColors && layout.tileColors.length === layout.tiles.length) {
     return layout
   }

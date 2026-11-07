@@ -1,4 +1,4 @@
-import type { SceneAdapter, AgentInfo, BubbleType, BossInfo, HandoffOptions, SceneObjectId } from "./SceneAdapter";
+import type { SceneAdapter, AgentInfo, BubbleType, BossInfo, HandoffOptions, SceneObjectId, SeatRole } from "./SceneAdapter";
 import type { OfficeState } from "../engine/officeState";
 import { BOSS_AGENT_ID, type AgentStatus } from "@pixel-crew/shared";
 
@@ -40,7 +40,7 @@ export class PixelSceneAdapter implements SceneAdapter {
 
   addAgent(agentId: string, info: AgentInfo): void {
     this.officeState.addCharacter(
-      agentId, info.name, info.palette, info.isExternal, info.label, info.labelColor,
+      agentId, info.name, info.palette, info.isExternal, info.label, info.labelColor, info.seatRole,
     );
     this.wake();
   }
@@ -103,6 +103,11 @@ export class PixelSceneAdapter implements SceneAdapter {
 
   snapToSeats(): void {
     this.officeState.snapToSeats();
+    this.wake();
+  }
+
+  setSeatRole(agentId: string, role: SeatRole | undefined): void {
+    this.officeState.setSeatRole(agentId, role);
     this.wake();
   }
 

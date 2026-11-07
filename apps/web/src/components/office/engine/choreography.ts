@@ -13,7 +13,7 @@
 // nobody moves; the giver shows the bubble and the recipient flashes the paper.
 // ---------------------------------------------------------------------------
 
-import { CharacterState, Direction, TILE_SIZE } from '../types'
+import { CharacterState, Direction, TILE_SIZE, TileType } from '../types'
 import type { Character, Seat, TileType as TileTypeVal } from '../types'
 import { findPath, isWalkable } from '../layout/tileMap'
 import { WALK_SPEED_PX_PER_SEC, WALK_FRAME_DURATION_SEC, SEAT_REST_MIN_SEC, SEAT_REST_MAX_SEC, WANDER_PAUSE_MIN_SEC, WANDER_PAUSE_MAX_SEC } from '../constants'
@@ -397,6 +397,9 @@ export class Choreographer {
           const key = `${n.col},${n.row}`
           if (seen.has(key)) continue
           seen.add(key)
+          // Never look through a wall: the spot must be in the recipient's room
+          const tile = tileMap[n.row]?.[n.col]
+          if (tile === undefined || tile === TileType.WALL || tile === TileType.VOID) continue
           nextRing.push(n)
           if (isWalkable(n.col, n.row, tileMap, blockedTiles)) candidates.push(n)
         }

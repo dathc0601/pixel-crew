@@ -2,15 +2,16 @@ import type { FloorColor } from './types'
 
 // ── Grid & Layout ────────────────────────────────────────────
 export const TILE_SIZE = 16
-export const DEFAULT_COLS = 21
-export const DEFAULT_ROWS = 21
+export const DEFAULT_COLS = 26
+export const DEFAULT_ROWS = 23
 export const MAX_COLS = 64
 export const MAX_ROWS = 64
 
 // ── Character Animation ─────────────────────────────────────
 export const WALK_SPEED_PX_PER_SEC = 48
 export const WALK_FRAME_DURATION_SEC = 0.15
-export const TYPE_FRAME_DURATION_SEC = 0.3
+/** Typing frames for working agents: ~7 fps (a low-rate tick; idle scenes still sleep) */
+export const TYPE_FRAME_DURATION_SEC = 0.14
 export const WANDER_PAUSE_MIN_SEC = 2.0
 export const WANDER_PAUSE_MAX_SEC = 20.0
 export const WANDER_MOVES_BEFORE_REST_MIN = 3

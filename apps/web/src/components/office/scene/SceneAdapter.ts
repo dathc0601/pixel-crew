@@ -10,7 +10,11 @@ export interface AgentInfo {
   labelColor: string;
   isExternal: boolean;
   palette?: number;
+  /** Desk preference in zoned layouts: the Lead's desk, the reviewer's, or a dev desk */
+  seatRole?: SeatRole;
 }
+
+export type SeatRole = "lead" | "reviewer" | "dev";
 
 /** Bubble type shown above an agent's head */
 export type BubbleType = "permission" | "working" | "waiting";
@@ -60,6 +64,8 @@ export interface SceneAdapter {
   showSubagent?(agentId: string, seconds?: number): void;
   /** Reconnect (§7.7): skip in-flight hand-offs and put everyone on their seat. */
   snapToSeats?(): void;
+  /** An agent's team role changed (e.g. it became the Lead): move it to a fitting desk. */
+  setSeatRole?(agentId: string, role: SeatRole | undefined): void;
   /** Clicks on the Boss or the task board. */
   setObjectClickHandler?(handler: ((id: SceneObjectId) => void) | null): void;
 }

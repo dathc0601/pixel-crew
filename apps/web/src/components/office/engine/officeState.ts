@@ -1,5 +1,5 @@
 import { TILE_SIZE, MATRIX_EFFECT_DURATION, CharacterState, Direction } from '../types'
-import type { Character, Seat, FurnitureInstance, TileType as TileTypeVal, OfficeLayout, PlacedFurniture } from '../types'
+import type { Character, Seat, SeatRole, FurnitureInstance, TileType as TileTypeVal, OfficeLayout, PlacedFurniture } from '../types'
 import { createCharacter, updateCharacter } from './characters'
 import { Choreographer, type HandoffRequest } from './choreography'
 import { matrixEffectSeeds } from './matrixEffect'
@@ -12,6 +12,7 @@ import {
   getBlockedTiles,
 } from '../layout/layoutSerializer'
 import { getCatalogEntry, getOnStateType } from '../layout/furnitureCatalog'
+import { hasZones, pickSeat, zoneAt } from '../layout/zones'
 import {
   PALETTE_COUNT,
   HUE_SHIFT_MIN_DEG,
@@ -52,6 +53,14 @@ export class OfficeState {
   blockedTiles: Set<string>
   furniture: FurnitureInstance[]
   walkableTiles: Array<{ col: number; row: number }>
+  /** Where idle agents spawn and wander: walkable tiles outside the Boss's room */
+  wanderTiles: Array<{ col: number; row: number }>
+  /** The layout has a zone map (seat rules follow zones) */
+  zoned = false
+  /** The wall-mounted task board next to the Lead, in world px (null when the layout has none) */
+  taskBoardFurnitureRect: { x: number; y: number; w: number; h: number } | null = null
+  /** Scene clock in seconds; typing frames of all working agents follow it, so they redraw together */
+  private clock = 0
   characters: Map<number, Character> = new Map()
   selectedCharId: number | null = null
   hoveredCharId: number | null = null
@@ -97,10 +106,12 @@ export class OfficeState {
   constructor(layout?: OfficeLayout) {
     this.layout = layout || createDefaultLayout()
     this.tileMap = layoutToTileMap(this.layout)
-    this.seats = layoutToSeats(this.layout.furniture)
+    this.seats = this.buildSeats(this.layout)
     this.blockedTiles = getBlockedTiles(this.layout.furniture)
     this.furniture = layoutToFurnitureInstances(this.layout.furniture)
     this.walkableTiles = getWalkableTiles(this.tileMap, this.blockedTiles)
+    this.wanderTiles = this.computeWanderTiles()
+    this.taskBoardFurnitureRect = this.findTaskBoard()
     this.characterScale = this.computeCharacterScale()
     // Getters, so the choreographer always sees the current layout after setLayout()
     // eslint-disable-next-line @typescript-eslint/no-this-alias
@@ -115,6 +126,24 @@ export class OfficeState {
       withOwnSeatUnblocked: (ch, fn) => this.withOwnSeatUnblocked(ch, fn),
       now: () => (typeof performance !== 'undefined' ? performance.now() : Date.now()),
     })
+  }
+
+  private buildSeats(layout: OfficeLayout): Map<string, Seat> {
+    this.zoned = hasZones(layout)
+    return layoutToSeats(layout.furniture, this.zoned ? (c, r) => zoneAt(layout, c, r) : undefined)
+  }
+
+  private computeWanderTiles(): Array<{ col: number; row: number }> {
+    if (!this.zoned) return this.walkableTiles
+    const open = this.walkableTiles.filter((t) => zoneAt(this.layout, t.col, t.row) !== 'boss_room')
+    return open.length > 0 ? open : this.walkableTiles
+  }
+
+  private findTaskBoard(): { x: number; y: number; w: number; h: number } | null {
+    const item = this.layout.furniture.find((f) => f.type === 'task-board')
+    const entry = item ? getCatalogEntry(item.type) : undefined
+    if (!item || !entry) return null
+    return { x: item.col * TILE_SIZE, y: item.row * TILE_SIZE, w: entry.footprintW * TILE_SIZE, h: entry.footprintH * TILE_SIZE }
   }
 
   private computeCharacterScale(): number {
@@ -136,10 +165,12 @@ export class OfficeState {
     this.layout = layout
     this.tileMap = layoutToTileMap(layout)
     this.characterScale = this.computeCharacterScale()
-    this.seats = layoutToSeats(layout.furniture)
+    this.seats = this.buildSeats(layout)
     this.blockedTiles = getBlockedTiles(layout.furniture)
     this.furniture = layoutToFurnitureInstances(layout.furniture)
     this.walkableTiles = getWalkableTiles(this.tileMap, this.blockedTiles)
+    this.wanderTiles = this.computeWanderTiles()
+    this.taskBoardFurnitureRect = this.findTaskBoard()
 
     // Reassign characters to seats and relocate to valid positions
     for (const ch of this.characters.values()) {
@@ -155,7 +186,7 @@ export class OfficeState {
         } else {
           // Old seat no longer exists — try to find a new one
           ch.seatId = null
-          const newSeatId = this.findFreeSeat()
+          const newSeatId = this.findFreeSeat(ch.seatRole)
           if (newSeatId) {
             const newSeat = this.seats.get(newSeatId)!
             newSeat.assigned = true
@@ -170,8 +201,8 @@ export class OfficeState {
         ch.tileCol = seat.seatCol
         ch.tileRow = seat.seatRow
         ch.dir = seat.facingDir
-      } else if (this.walkableTiles.length > 0) {
-        const spawn = this.walkableTiles[Math.floor(Math.random() * this.walkableTiles.length)]
+      } else if (this.wanderTiles.length > 0) {
+        const spawn = this.wanderTiles[Math.floor(Math.random() * this.wanderTiles.length)]
         ch.tileCol = spawn.col
         ch.tileRow = spawn.row
       }
@@ -186,7 +217,7 @@ export class OfficeState {
 
   // ── Public API (string agentId) ───────────────────────────────
 
-  addCharacter(agentId: string, _name: string, palette?: number, isExternal?: boolean, label?: string, labelColor?: string): void {
+  addCharacter(agentId: string, _name: string, palette?: number, isExternal?: boolean, label?: string, labelColor?: string, seatRole?: SeatRole): void {
     if (this.agentIdToCharId.has(agentId)) return
 
     const charId = this.nextCharId++
@@ -198,10 +229,11 @@ export class OfficeState {
       : this.pickDiversePalette()
 
     // All agents start idle and wandering — work seats are assigned only when they become active
-    const spawn = this.walkableTiles.length > 0
-      ? this.walkableTiles[Math.floor(Math.random() * this.walkableTiles.length)]
+    const spawn = this.wanderTiles.length > 0
+      ? this.wanderTiles[Math.floor(Math.random() * this.wanderTiles.length)]
       : { col: 1, row: 1 }
     const ch = createCharacter(charId, pickedPalette, null, null, hueShift, CharacterState.IDLE)
+    if (seatRole) ch.seatRole = seatRole
     ch.x = spawn.col * TILE_SIZE + TILE_SIZE / 2
     ch.y = spawn.row * TILE_SIZE + TILE_SIZE / 2
     ch.tileCol = spawn.col
@@ -273,11 +305,14 @@ export class OfficeState {
         ch.restSeatId = null
         ch.seatTimer = 0
       }
-      const seatId = this.findFreeSeat()
+      const seatId = this.findFreeSeat(ch.seatRole)
       if (seatId) {
         const seat = this.seats.get(seatId)!
         seat.assigned = true
         ch.seatId = seatId
+        // A team member that just joined starts at its own desk (not wandering), so
+        // hand-offs read as "walk over to that desk" from the first task on
+        if (ch.matrixEffect === 'spawn' && !this.choreo.isBusy(ch.id)) this.seatAt(ch, seat, isNowActive)
       }
       this.rebuildFurnitureInstances()
     }
@@ -307,7 +342,7 @@ export class OfficeState {
           ch.restSeatId = null
           ch.seatTimer = 0
         }
-        const seatId = this.findFreeSeat()
+        const seatId = this.findFreeSeat(ch.seatRole)
         if (seatId) {
           const seat = this.seats.get(seatId)!
           seat.assigned = true
@@ -316,6 +351,36 @@ export class OfficeState {
       }
       this.rebuildFurnitureInstances()
     }
+  }
+
+  /**
+   * Set the desk preference of an agent (its team role can arrive after it joined).
+   * When the role changes the agent gives up its desk and walks to one that fits.
+   */
+  setSeatRole(agentId: string, role: SeatRole | undefined): void {
+    const charId = this.agentIdToCharId.get(agentId)
+    const ch = charId !== undefined ? this.characters.get(charId) : undefined
+    if (!ch || ch.isBoss || ch.seatRole === role) return
+    ch.seatRole = role
+    if (!ch.seatId || !this.zoned) return
+    const old = this.seats.get(ch.seatId)
+    if (old) old.assigned = false
+    const next = this.findFreeSeat(role)
+    if (!next || next === ch.seatId) {
+      if (old) old.assigned = true
+      return
+    }
+    this.seats.get(next)!.assigned = true
+    ch.seatId = next
+    if (!this.choreo.isBusy(ch.id) && ch.state === CharacterState.TYPE) {
+      // Stand up and walk over (active agents go straight away, idle ones after a short pause)
+      ch.state = CharacterState.IDLE
+      ch.frame = 0
+      ch.wanderTimer = 0.3
+      ch.wanderCount = ch.wanderLimit
+    }
+    this.rebuildFurnitureInstances()
+    this.markDirty()
   }
 
   selectCharacter(agentId: string | null): void {
@@ -455,6 +520,7 @@ export class OfficeState {
   // ── Update loop ───────────────────────────────────────────────
 
   update(dt: number): void {
+    this.clock += dt
     let wake: number | null = null
     const wakeIn = (sec: number) => {
       if (Number.isFinite(sec) && sec >= 0 && (wake === null || sec < wake)) wake = sec
@@ -491,7 +557,7 @@ export class OfficeState {
 
       // Active character without a work seat — try to claim one
       if (ch.isActive && !ch.seatId && ch.state === CharacterState.IDLE) {
-        const seatId = this.findFreeSeat()
+        const seatId = this.findFreeSeat(ch.seatRole)
         if (seatId) {
           const seat = this.seats.get(seatId)!
           seat.assigned = true
@@ -507,8 +573,12 @@ export class OfficeState {
       } else {
         // Temporarily unblock own seat so character can pathfind to it
         this.withOwnSeatUnblocked(ch, () =>
-          updateCharacter(ch, dt, this.walkableTiles, this.seats, this.tileMap, this.blockedTiles, this.characterScale, () => this.findFreeRestSeat())
+          updateCharacter(ch, dt, this.wanderTiles, this.seats, this.tileMap, this.blockedTiles, this.characterScale, () => this.findFreeRestSeat())
         )
+        // Every working agent types on the same beat, so N typists still cost one redraw per frame
+        if (ch.state === CharacterState.TYPE && ch.isActive) {
+          ch.frame = Math.floor(this.clock / TYPE_FRAME_DURATION_SEC) % 2
+        }
       }
 
       // Tick the received-paper flash
@@ -552,7 +622,7 @@ export class OfficeState {
       // earliest one instead of ticking every frame (P1.4: idle scenes cost nothing).
       if (ch.state === CharacterState.WALK) wakeIn(0)
       else if (ch.state === CharacterState.TYPE) {
-        if (ch.isActive) wakeIn(Math.max(0, TYPE_FRAME_DURATION_SEC - ch.frameTimer))
+        if (ch.isActive) wakeIn(TYPE_FRAME_DURATION_SEC - (this.clock % TYPE_FRAME_DURATION_SEC))
         else if (ch.seatTimer > 0) wakeIn(ch.seatTimer)
       } else if (ch.state === CharacterState.IDLE) {
         if (ch.isActive && ch.seatId) wakeIn(0)
@@ -627,6 +697,21 @@ export class OfficeState {
     this.characters.set(charId, ch)
     this._charListDirty = true
     this.markDirty()
+  }
+
+  /** Put a character on a seat right away (no walk). */
+  private seatAt(ch: Character, seat: Seat, active: boolean): void {
+    ch.path = []
+    ch.moveProgress = 0
+    ch.tileCol = seat.seatCol
+    ch.tileRow = seat.seatRow
+    ch.x = seat.seatCol * TILE_SIZE + TILE_SIZE / 2
+    ch.y = seat.seatRow * TILE_SIZE + TILE_SIZE / 2
+    ch.dir = seat.facingDir
+    ch.state = CharacterState.TYPE
+    ch.frame = 0
+    ch.frameTimer = 0
+    ch.seatTimer = active ? 0 : SEAT_REST_ON_SNAP_SEC
   }
 
   /** Seat the Boss at a "boss" chair; layouts without one get a fixed standing spot. */
@@ -737,7 +822,7 @@ export class OfficeState {
 
   /** The Boss or the task board under a world position, if any. */
   getObjectAtPixel(worldX: number, worldY: number): SceneObjectId | null {
-    const r = this.taskBoardRect
+    const r = this.taskBoardRect ?? this.taskBoardFurnitureRect
     if (r && worldX >= r.x && worldX <= r.x + r.w && worldY >= r.y && worldY <= r.y + r.h) return 'task-board'
     return null
   }
@@ -800,16 +885,14 @@ export class OfficeState {
 
   // ── Private helpers ───────────────────────────────────────────
 
-  private findFreeSeat(): string | null {
-    for (const [uid, seat] of this.seats) {
-      if (!seat.assigned && !seat.isRest && !seat.isBoss) return uid
-    }
-    return null
+  /** A free work seat for this role (zones decide when the layout has them). */
+  private findFreeSeat(role?: SeatRole): string | null {
+    return pickSeat(this.seats, role, this.zoned)
   }
 
   /** Find a free rest seat (sofa, etc.) for idle characters */
   findFreeRestSeat(): string | null {
-    const restSeats = [...this.seats.entries()].filter(([, s]) => s.isRest && !s.assigned)
+    const restSeats = [...this.seats.entries()].filter(([, s]) => s.isRest && !s.assigned && s.zone !== 'boss_room')
     if (restSeats.length === 0) return null
     // Pick a random one
     const [uid] = restSeats[Math.floor(Math.random() * restSeats.length)]

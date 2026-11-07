@@ -70,9 +70,22 @@ export interface Seat {
   assigned: boolean
   /** Rest seat (sofa etc.) — characters sit here when idle, not for work */
   isRest?: boolean
-  /** The Boss's chair (chair uid starts with "boss"); never handed to an agent */
+  /** The Boss's chair (chair uid starts with "boss", or a seat in the boss_room zone); never handed to an agent */
   isBoss?: boolean
+  /** Zone the seat lies in (layouts with a zone map) */
+  zone?: ZoneKind
 }
+
+/**
+ * Named areas of the floor plan (layout v2). Seat assignment follows them: the Boss sits in
+ * boss_room, the Lead (and the reviewer) in lead_area, devs fill dev_area desks in order.
+ * meeting and pantry are decorative; idle agents may wander there, never into boss_room.
+ */
+export const ZONE_KINDS = ['boss_room', 'lead_area', 'dev_area', 'meeting', 'pantry'] as const
+export type ZoneKind = (typeof ZONE_KINDS)[number]
+
+/** Which kind of desk an agent should get */
+export type SeatRole = 'lead' | 'reviewer' | 'dev'
 
 export interface FurnitureInstance {
   sprite: SpriteData
@@ -149,12 +162,15 @@ export interface PlacedFurniture {
 }
 
 export interface OfficeLayout {
-  version: 1
+  /** 1 = original pixel-agents format; 2 adds the optional zone map */
+  version: 1 | 2
   cols: number
   rows: number
   tiles: TileType[]
   furniture: PlacedFurniture[]
   tileColors?: Array<FloorColor | null>
+  /** Per-tile zone (row-major, like tiles), or null outside any zone. v2 only. */
+  zones?: Array<ZoneKind | null>
 }
 
 export const EditTool = {
@@ -165,6 +181,7 @@ export const EditTool = {
   FURNITURE_PLACE: 'furniture_place',
   FURNITURE_PICK: 'furniture_pick',
   EYEDROPPER: 'eyedropper',
+  ZONE_PAINT: 'zone_paint',
 } as const
 export type EditTool = (typeof EditTool)[keyof typeof EditTool]
 
@@ -231,8 +248,10 @@ export interface Character {
   label: string | null
   /** Background color for the label badge */
   labelColor: string | null
-  /** The Boss (the human user): never wanders, drawn with a crown */
+  /** The Boss (the human user): never wanders, drawn with a crown and a suit */
   isBoss?: boolean
+  /** Desk preference by team role (zones); undefined = any free desk */
+  seatRole?: SeatRole
   /** Holding a paper (hand-off prop) */
   carrying?: boolean
   /** Seconds left showing a just-received paper */

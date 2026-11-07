@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { useOfficeStore } from "@/store/office-store";
-import type { SceneAdapter, BubbleType } from "./SceneAdapter";
+import type { SceneAdapter, BubbleType, SeatRole } from "./SceneAdapter";
 
 import { TERM_SEM_BLUE, TERM_SEM_YELLOW, TERM_DIM } from "../ui/termTheme";
 
@@ -28,6 +28,14 @@ function getAgentLabel(agent: {
   const short = agent.name.split(/[\s(]/)[0];
   const color = agent.teamId ? AGENT_TYPE_COLORS.team : AGENT_TYPE_COLORS.normal;
   return { label: short, color };
+}
+
+/** Which desk an agent should get in a zoned office (Lead area, reviewer desk, dev desks) */
+export function deriveSeatRole(agent: { isTeamLead?: boolean; role?: string; teamId?: string; isExternal?: boolean }): SeatRole | undefined {
+  if (agent.isExternal) return undefined;
+  if (agent.isTeamLead) return "lead";
+  if (/review/i.test(agent.role ?? "")) return "reviewer";
+  return "dev";
 }
 
 /** Derive which bubble to show from the agent's store state */
@@ -64,6 +72,7 @@ export function useSceneBridge(
         labelColor,
         isExternal: !!agent.isExternal,
         palette: agent.palette,
+        seatRole: deriveSeatRole(agent),
       });
       adapter.updateAgent(agentId, agent.status, deriveBubble(agent), !!agent.teamId);
       knownAgentsRef.current.add(agentId);
@@ -96,9 +105,11 @@ export function useSceneBridge(
             labelColor,
             isExternal: !!agent.isExternal,
             palette: agent.palette,
+            seatRole: deriveSeatRole(agent),
           });
           knownAgentsRef.current.add(agentId);
         }
+        adapter.setSeatRole?.(agentId, deriveSeatRole(agent));
 
         // Team members keep their seat when inactive (done/idle), solo agents release it
         adapter.updateAgent(agentId, agent.status, deriveBubble(agent), !!agent.teamId);
