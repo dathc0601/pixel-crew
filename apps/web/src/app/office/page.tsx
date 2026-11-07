@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo } fr
 import { useRouter } from "next/navigation";
 import { useOfficeStore, imageUploadCallbacks } from "@/store/office-store";
 import { useAttachSectionSync } from "@/components/office/attach/useAttachSectionSync";
+import { createAutoSelect, type AutoSelectState } from "@/components/office/attach/sidePanelSelection";
 import { connect, sendCommand } from "@/lib/connection";
 import { getConnection } from "@/lib/storage";
 import { nanoid } from "nanoid";
@@ -662,6 +663,13 @@ export default function OfficePage() {
     }
   }, [agents, selectedAgent]);
   useAttachSectionSync(selectedAgent, expandedSection, setExpandedSection);
+  // Sidebar: select the first agent of the open tab when the selected one is not listed
+  // there. Deferred out of render, and decided from the latest render when it runs.
+  const autoSelectStateRef = useRef<AutoSelectState>({ selectedInTab: true, firstId: undefined });
+  const [requestAutoSelect] = useState(() => createAutoSelect(
+    () => autoSelectStateRef.current,
+    (agentId) => { setSelectedAgent(agentId); setChatOpen(true); },
+  ));
 
   const handleAgentClick = useCallback((agentId: string) => {
     setSelectedAgent(agentId);
@@ -1850,9 +1858,9 @@ export default function OfficePage() {
 
             {/* -- Chat content: single pane (sidebar) or multi pane (console) -- */}
             {/* Auto-select first agent if none selected in current tab (sidebar mode only) */}
-            {!consoleMode && !selectedInTab && activeAgentList.length > 0 && (() => {
-              const first = activeAgentList[0];
-              setTimeout(() => { setSelectedAgent(first.agentId); setChatOpen(true); }, 0);
+            {(() => {
+              autoSelectStateRef.current = { selectedInTab: consoleMode || selectedInTab, firstId: activeAgentList[0]?.agentId };
+              if (!consoleMode && !selectedInTab && activeAgentList.length > 0) requestAutoSelect();
               return null;
             })()}
             {consoleMode ? (
