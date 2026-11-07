@@ -923,6 +923,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEventMap> {
       this.dispatcher.finishRoot(item.id, false, "The Team Lead left the team");
       return;
     }
+    // A previous Boss task may have finished (execute → complete) during the walk
+    this.ensureExecutePhase(leadId);
     // Context for result rounds: every Boss task still open
     lead.originalTask = this.dispatcher.activeRoots().map((r) => r.prompt).join("\n\n---\n\n") || item.prompt;
     const flags = item.flags ?? NO_BOSS_FLAGS;
@@ -1278,8 +1280,9 @@ export class Orchestrator extends EventEmitter<OrchestratorEventMap> {
 
           // Clear any straggler delegations so they don't restart the leader later
           this.delegationRouter.clearAgent(agentId);
-          // The Boss's task(s) are finished
-          for (const root of this.dispatcher.activeRoots()) this.dispatcher.finishRoot(root.id, true);
+          // The Boss's task(s) the Lead was holding are finished. One that is still walking
+          // over (BOSS_ASSIGN during this final run) is not: it starts when it arrives.
+          for (const root of this.dispatcher.runningRoots()) this.dispatcher.finishRoot(root.id, true);
 
           // Merge all worker worktrees back to main branch
           if (this.worktreeMerge) {

@@ -262,10 +262,18 @@ export class Dispatcher {
     this.schedulePump();
   }
 
+  /**
+   * Boss items the Lead actually holds (state running). A Boss item still walking over
+   * (assigned / handing_off) has not reached the Lead, so a Lead result must not finish it.
+   */
+  runningRoots(): WorkItem[] {
+    return this.activeRoots().filter((i) => i.state === "running");
+  }
+
   /** Finish every Boss item that has no sub-task left to do (Lead's final result). */
   finishSettledRoots(): string[] {
     const finished: string[] = [];
-    for (const root of this.activeRoots()) {
+    for (const root of this.runningRoots()) {
       const pending = this.childrenOf(root.id).some((c) => c.state === "queued" || ACTIVE_STATES.has(c.state));
       if (!pending) {
         this.finishRoot(root.id, true);

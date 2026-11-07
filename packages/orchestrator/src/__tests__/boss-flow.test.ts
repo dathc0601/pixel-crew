@@ -267,6 +267,26 @@ describe("Boss flow with the fake backend", () => {
     assert.equal(b.orc.getWorkItems().find((i) => i.id === root.id)?.state, "running");
   });
 
+  it("a Boss task assigned while the Lead finishes the previous one still runs", async () => {
+    const h = harness([
+      { match: "New result from", text: "FINAL SUMMARY: all done.", delayMs: 400 },
+      { match: "The Boss assigned you a task", text: "TASK: job" },
+      dev("Ann"),
+    ], { handoffDurationMs: () => 700 });
+    hireTeam(h, ["Ann"]);
+    h.orc.bossAssign({ prompt: "First task", urgent: false });
+    // The Lead's result run (final summary) has started: assign the next task now
+    await h.waitFor((e): e is TaskStartedEvent => e.type === "task:started" && e.agentId === LEAD && /New result from/.test(e.prompt), 9000);
+    const second = h.orc.bossAssign({ prompt: "Second task", urgent: false });
+    assert.ok(second.ok);
+    await h.waitFor(isFinal, 9000);
+    const midway = h.orc.getWorkItems().find((i) => second.ok && i.id === second.item.id)!;
+    assert.notEqual(midway.state, "done", "the first final result did not finish the task still walking over");
+    await h.waitFor((e) => e.type === "work:updated" && second.ok && e.item.id === second.item.id && e.item.state === "done", 9000);
+    const bossRuns = h.records().filter((r) => r.rule === 1);
+    assert.equal(bossRuns.length, 2, "the Lead ran both Boss tasks");
+  });
+
   it("the Boss hand-off delays the Lead's start by durationMs", async () => {
     const h = harness([{ match: ".*", text: "Nothing to delegate." }], { handoffDurationMs: () => 250 });
     hireTeam(h, ["Ann"]);
