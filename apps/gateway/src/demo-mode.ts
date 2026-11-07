@@ -96,10 +96,24 @@ export function resolveDemoAgentScript(fallback: string): string {
   throw new Error(`Demo mode: fake-agent.mjs not found (looked in ${here} and ${fallback})`);
 }
 
+/**
+ * The scenario with every delay multiplied by `scale` (PIXEL_CREW_DEMO_DELAY_SCALE,
+ * default 1). Tests use a small scale so the full Boss → Lead → Dev → reviewer run
+ * takes seconds; nobody needs it in normal use.
+ */
+export function scaledDemoScenario(scale: number): typeof DEMO_SCENARIO {
+  if (!Number.isFinite(scale) || scale < 0 || scale === 1) return DEMO_SCENARIO;
+  const s = (ms: number | undefined) => (ms === undefined ? undefined : Math.round(ms * scale));
+  return {
+    rules: DEMO_SCENARIO.rules.map((r) => ({ ...r, delayMs: s(r.delayMs), jitterMs: s(r.jitterMs) })),
+    default: { ...DEMO_SCENARIO.default, delayMs: s(DEMO_SCENARIO.default.delayMs) },
+  };
+}
+
 /** Write the demo scenario into the data dir and return its path. */
-export function writeDemoScenario(dataDir: string): string {
+export function writeDemoScenario(dataDir: string, scale = Number(process.env.PIXEL_CREW_DEMO_DELAY_SCALE ?? 1)): string {
   const file = resolve(dataDir, "demo-scenario.json");
   mkdirSync(dataDir, { recursive: true });
-  writeFileSync(file, JSON.stringify(DEMO_SCENARIO, null, 2));
+  writeFileSync(file, JSON.stringify(scaledDemoScenario(scale), null, 2));
   return file;
 }
