@@ -1,8 +1,9 @@
-import { spawn, execSync, type ChildProcess } from "child_process";
+import type { ChildProcess } from "child_process";
 import path from "path";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { CONFIG } from "./config.js";
 import { getDataDir } from "./paths.js";
+import { killTree, resolveCommand, spawnPortable } from "./proc.js";
 import { resolveSpawnPermission, type PermissionPolicy, type SpawnPermission } from "./permissions.js";
 import { resolvePreview } from "./preview-resolver.js";
 import { parseAgentOutput } from "./output-parser.js";
@@ -21,7 +22,7 @@ import { getMemoryContext, commitSession, buildRecoveryContext, getRecoveryStrin
 function summarizeToolUse(name: string, input: Record<string, unknown> | undefined): string | null {
   if (!input) return `Using ${name}`;
   const filePath = input.file_path as string | undefined;
-  const basename = filePath ? filePath.split("/").pop() : undefined;
+  const basename = filePath ? filePath.split(/[\\/]/).pop() : undefined;
   switch (name) {
     case "Read":
       return basename ? `Reading ${basename}` : "Reading file";
@@ -532,10 +533,8 @@ export class AgentSession {
       });
 
       // Log which binary + env state
-      try {
-        const whichPath = execSync(`which ${this.backend.command}`, { env: cleanEnv, encoding: "utf-8", timeout: 3000 }).trim();
-        console.log(`[Agent ${this.name}] Binary: ${whichPath}, CLAUDECODE=${cleanEnv.CLAUDECODE ?? "unset"}, ENTRYPOINT=${cleanEnv.CLAUDE_CODE_ENTRYPOINT ?? "unset"}`);
-      } catch { /* ignore */ }
+      const resolvedBinary = resolveCommand(this.backend.command, cleanEnv);
+      console.log(`[Agent ${this.name}] Binary: ${resolvedBinary ?? `${this.backend.command} (not found on PATH)`}, CLAUDECODE=${cleanEnv.CLAUDECODE ?? "unset"}, ENTRYPOINT=${cleanEnv.CLAUDE_CODE_ENTRYPOINT ?? "unset"}`);
       console.log(`[Agent ${this.name}] Spawning: ${this.backend.command} ${args.map(a => a.length > 80 ? a.slice(0, 80) + '...' : a).join(' ')}`);
       console.log(`[Agent ${this.name}] CWD=${cwd}, worktreePath=${this.worktreePath ?? "none"}`);
 
@@ -545,12 +544,13 @@ export class AgentSession {
       }
 
       // stdin MUST be "ignore" — "pipe" causes Claude Code to hang waiting for input
-      // detached: true creates a new process group so we can kill the entire tree on cancel
-      this.process = spawn(this.backend.command, args, {
+      // group: own process group on Unix so cancel kills the whole tree (taskkill /T on Windows);
+      // spawnPortable also unwraps npm .cmd shims on Windows (no cmd.exe, newlines survive)
+      this.process = spawnPortable(this.backend.command, args, {
         cwd,
         env: cleanEnv,
         stdio: ["ignore", "pipe", "pipe"],
-        detached: true,
+        group: true,
       });
 
       // Task timeout: only for team members (prevent blocking the team flow).
@@ -564,7 +564,7 @@ export class AgentSession {
           if (this.process?.pid) {
             console.log(`[Agent ${this.agentId}] Task timed out after ${TASK_TIMEOUT_MS / 1000}s, killing`);
             this.timedOut = true;
-            try { process.kill(-this.process.pid, "SIGKILL"); } catch { this.process.kill("SIGKILL"); }
+            killTree(this.process.pid, "SIGKILL");
           }
         }, TASK_TIMEOUT_MS);
       }
@@ -793,8 +793,10 @@ export class AgentSession {
 
         // Kill the agent's process group to clean up any orphan child processes
         // (e.g., dev servers the agent may have started despite prompt instructions)
-        if (agentPid) {
-          try { process.kill(-agentPid, "SIGTERM"); } catch { /* group already dead */ }
+        // Unix only: the group outlives its leader while children run. On Windows the pid is
+        // already free, and taskkill on a reused pid could hit an unrelated process.
+        if (agentPid && process.platform !== "win32") {
+          killTree(agentPid, "SIGTERM");
         }
 
         // Flush any remaining data in the JSON line buffer (last line without trailing newline)
@@ -993,7 +995,7 @@ export class AgentSession {
         let errorMsg: string;
         if ((err as NodeJS.ErrnoException).code === "ENOENT") {
           const cwdExists = this.currentCwd ? existsSync(this.currentCwd) : false;
-          const binaryExists = existsSync(this.backend.command);
+          const binaryExists = existsSync(this.backend.command) || resolveCommand(this.backend.command) !== null;
           if (!cwdExists) {
             errorMsg = `Working directory "${this.currentCwd}" does not exist. The project may have been moved or deleted.`;
           } else if (!binaryExists) {
@@ -1170,9 +1172,7 @@ export class AgentSession {
     const pid = this.process?.pid;
     if (!pid) return false;
     this.abortReason = reason;
-    try { process.kill(-pid, "SIGKILL"); } catch {
-      try { this.process?.kill("SIGKILL"); } catch { /* already dead */ }
-    }
+    killTree(pid, "SIGKILL");
     return true;
   }
 
@@ -1205,9 +1205,7 @@ export class AgentSession {
       this.onTaskComplete?.(this.agentId, cancelledTaskId, "Task cancelled by user", false);
 
       const pgid = this.process.pid;
-      try { process.kill(-pgid, "SIGKILL"); } catch {
-        try { this.process.kill("SIGKILL"); } catch { /* already dead */ }
-      }
+      killTree(pgid, "SIGKILL");
     }
 
     // Always force UI reset — even if process was already gone.
@@ -1251,9 +1249,7 @@ export class AgentSession {
     if (this.process?.pid) {
       const pgid = this.process.pid;
       // Use SIGKILL — CLI agents like codex/claude ignore SIGTERM
-      try { process.kill(-pgid, "SIGKILL"); } catch {
-        try { this.process.kill("SIGKILL"); } catch { /* already dead */ }
-      }
+      killTree(pgid, "SIGKILL");
       this.process = null;
     }
     if (this.awaitingSpawnApproval) {

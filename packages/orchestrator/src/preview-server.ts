@@ -1,4 +1,5 @@
-import { spawn, execSync, type ChildProcess } from "child_process";
+import { spawn, type ChildProcess } from "child_process";
+import { isPortOpen, killTree, pidsListeningOn } from "./proc.js";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import path from "path";
 import { getDataDir } from "./paths.js";
@@ -52,15 +53,10 @@ function saveStaticState(state: StaticState | null): void {
  * Handles orphaned servers from previous gateway sessions.
  */
 function killPortProcess(port: number): void {
-  try {
-    const pids = execSync(`lsof -ti:${port}`, { encoding: "utf8", timeout: 3000 }).trim();
-    if (pids) {
-      for (const pid of pids.split("\n")) {
-        try { process.kill(Number(pid), "SIGKILL"); } catch { /* already dead */ }
-      }
-      console.log(`[PreviewServer] Killed orphan on :${port} (pids: ${pids.replace(/\n/g, ", ")})`);
-    }
-  } catch { /* no process on port — expected */ }
+  const pids = pidsListeningOn(port).filter((pid) => pid !== process.pid);
+  if (pids.length === 0) return;
+  for (const pid of pids) killTree(pid, "SIGKILL", { sync: true });
+  console.log(`[PreviewServer] Killed orphan on :${port} (pids: ${pids.join(", ")})`);
 }
 
 /**
@@ -153,7 +149,9 @@ class PreviewServer {
         shell: true,
         cwd,
         stdio: "ignore",
-        detached: true,
+        // Own process group on Unix (killTree reaches the server it starts); no console window on Windows
+        detached: process.platform !== "win32",
+        windowsHide: true,
         env: { ...process.env, PORT: String(port) },
       });
       this.isDetached = true;
@@ -180,7 +178,7 @@ class PreviewServer {
         shell: true,
         cwd,
         stdio: ["ignore", "ignore", "pipe"],
-        detached: true,
+        detached: process.platform !== "win32",
       });
       this.isDetached = true;
       console.log(`[PreviewServer] Launched "${cmd}" in ${cwd} (pid=${this.process.pid})`);
@@ -199,13 +197,10 @@ class PreviewServer {
   /** Stop only the command/launch child process. Static dir is preserved. */
   stopCommand() {
     if (this.process) {
-      try {
-        if (this.isDetached && this.process.pid) {
-          process.kill(-this.process.pid, "SIGTERM");
-        } else {
-          this.process.kill("SIGTERM");
-        }
-      } catch { /* already dead */ }
+      // The shell wraps the real server, so always take the whole tree (taskkill /T on Windows)
+      if (!killTree(this.process.pid, "SIGTERM")) {
+        try { this.process.kill("SIGTERM"); } catch { /* already dead */ }
+      }
       this.process = null;
       this.isDetached = false;
       console.log(`[PreviewServer] Command stopped`);
@@ -213,10 +208,8 @@ class PreviewServer {
   }
 
   /** Check if the command port is listening. */
-  private isPortListening(port: number): boolean {
-    try {
-      return execSync(`lsof -ti:${port}`, { encoding: "utf8", timeout: 2000 }).trim().length > 0;
-    } catch { return false; }
+  private isPortListening(port: number): Promise<boolean> {
+    return isPortOpen(port);
   }
 
   /**
@@ -224,7 +217,7 @@ class PreviewServer {
    * If the process died, auto-restart from persisted state.
    */
   async ensureCommandRunning(): Promise<boolean> {
-    if (this.isPortListening(COMMAND_PORT)) return true;
+    if (await this.isPortListening(COMMAND_PORT)) return true;
 
     const state = this.lastCmdState ?? loadCmdState();
     if (!state) {
@@ -239,7 +232,7 @@ class PreviewServer {
     // Wait for the server to become ready (up to 3s)
     for (let i = 0; i < 6; i++) {
       await new Promise((r) => setTimeout(r, 500));
-      if (this.isPortListening(COMMAND_PORT)) return true;
+      if (await this.isPortListening(COMMAND_PORT)) return true;
     }
     console.log(`[PreviewServer] Auto-restart timed out for :${COMMAND_PORT}`);
     return false;
