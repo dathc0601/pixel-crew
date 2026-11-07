@@ -1,0 +1,7 @@
+{
+  "$comment": "First-load JS budgets in kB (1000 bytes, gzip), checked by scripts/check-bundle-size.mjs after `next build`. firstLoadKb matches Next's 'First Load JS' column; withLayoutKb adds the root layout's own chunks, which also load on first paint. CI fails above budget * (1 + tolerance). Lower the numbers when you make the bundle smaller.",
+  "tolerance": 0.05,
+  "routes": {
+    "/office": { "firstLoadKb": 158, "withLayoutKb": 184 }
+  }
+}

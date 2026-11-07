@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
+    "size": "node scripts/check-bundle-size.mjs",
     "test": "node --import tsx --test \"src/**/__tests__/*.test.ts\""
   },
   "dependencies": {
