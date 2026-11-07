@@ -16,6 +16,10 @@ import type { SceneComponentProps } from "./SceneAdapter";
 import { PixelSceneAdapter } from "./PixelSceneAdapter";
 import { BOSS_AGENT_ID } from "@pixel-crew/shared";
 
+/** Views this narrow (phones) never shrink the map below NARROW_MIN_ZOOM; they pan instead */
+const NARROW_VIEW_PX = 600;
+const NARROW_MIN_ZOOM = 1.4;
+
 export interface PixelOfficeSceneProps extends SceneComponentProps {
   editMode: boolean;
   editorRef: React.MutableRefObject<EditorState>;
@@ -86,14 +90,39 @@ export default function PixelOfficeScene({
   /** Wake the game loop from sleep on user interaction */
   const wakeRef = useRef<(() => void) | null>(null);
 
-  /** Calculate zoom so the map fills the viewport (contain fit) */
+  /**
+   * Zoom so the map fills the viewport (contain fit). Phones get at least a readable zoom
+   * instead (characters and tap targets stay big enough) and pan sideways to see the rest.
+   */
   const calcFitZoom = useCallback((viewW: number, viewH: number) => {
     const office = officeStateRef.current;
     if (!office) return 4;
     const mapW = office.layout.cols * TILE_SIZE;
     const mapH = office.layout.rows * TILE_SIZE;
-    return Math.max(ZOOM_MIN, Math.min(viewW / mapW, viewH / mapH));
+    const contain = Math.min(viewW / mapW, viewH / mapH);
+    if (viewW <= NARROW_VIEW_PX && contain < NARROW_MIN_ZOOM) {
+      return Math.max(ZOOM_MIN, Math.min(NARROW_MIN_ZOOM, viewH / mapH));
+    }
+    return Math.max(ZOOM_MIN, contain);
   }, [officeStateRef]);
+
+  /** Keep a panned map covering the viewport (pan only exists when the map overflows it). */
+  const clampPan = useCallback((x: number, y: number) => {
+    const canvas = canvasRef.current;
+    const office = officeStateRef.current;
+    if (!canvas || !office) return { x: 0, y: 0 };
+    const zoom = zoomRef.current;
+    const overX = Math.max(0, (office.layout.cols * TILE_SIZE * zoom - canvas.clientWidth) / 2);
+    const overY = Math.max(0, (office.layout.rows * TILE_SIZE * zoom - canvas.clientHeight) / 2);
+    return { x: Math.max(-overX, Math.min(overX, x)), y: Math.max(-overY, Math.min(overY, y)) };
+  }, [officeStateRef, zoomRef]);
+
+  /** Dragging pans when PAN_ENABLED, or whenever the map is bigger than the view (phones). */
+  const canPan = useCallback(() => {
+    if (PAN_ENABLED) return true;
+    const p = clampPan(Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
+    return p.x > 0 || p.y > 0;
+  }, [clampPan]);
 
   // Resize handler
   const resizeCanvas = useCallback(() => {
@@ -112,10 +141,11 @@ export default function PixelOfficeScene({
     if (ctx) {
       ctx.scale(dpr, dpr);
     }
-    // Auto-fit zoom — renderer already centers the map, so reset pan to origin
+    // Auto-fit zoom — renderer already centers the map, so reset pan to origin. A map wider
+    // than a phone screen starts at its left edge, where the Boss's room is.
     zoomRef.current = calcFitZoom(w, h);
-    panRef.current = { x: 0, y: 0 };
-  }, [calcFitZoom, zoomRef, panRef]);
+    panRef.current = clampPan(Number.MAX_SAFE_INTEGER, 0);
+  }, [calcFitZoom, clampPan, zoomRef, panRef]);
 
   // Load assets on mount
   useEffect(() => {
@@ -281,8 +311,10 @@ export default function PixelOfficeScene({
           {
             taskBoard: officeState.taskBoard,
             subagentCues: officeState.subagentCues,
+            boardRect: officeState.taskBoardFurnitureRect,
             setTaskBoardRect: (rect) => { officeState.taskBoardRect = rect; },
           },
+          officeState.layout,
         );
         lastOffsetsRef.current = result;
         editorRenderRef.current = editorRenderState ?? null;
@@ -375,17 +407,14 @@ export default function PixelOfficeScene({
     }
 
     if (!isPanningRef.current) return;
-    if (!PAN_ENABLED) return;
+    if (editModeRef.current || !canPan()) return;
     if (editorRef.current.dragUid) return; // don't pan while dragging furniture
 
     const dx = e.clientX - panStartRef.current.x;
     const dy = e.clientY - panStartRef.current.y;
-    panRef.current = {
-      x: panStartRef.current.panX + dx,
-      y: panStartRef.current.panY + dy,
-    };
+    panRef.current = clampPan(panStartRef.current.panX + dx, panStartRef.current.panY + dy);
     wakeRef.current?.();
-  }, [screenToWorld, screenToTile, officeStateRef, panRef, editorRef, onDragMove, onGhostMove]);
+  }, [screenToWorld, screenToTile, officeStateRef, panRef, editorRef, onDragMove, onGhostMove, canPan, clampPan]);
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
     const wasPanning = isPanningRef.current;

@@ -473,6 +473,9 @@ export default function OfficePage() {
           setMapAspect(result.layout.cols / result.layout.rows);
           // Recalc zoom after React re-render + container resize settles
           requestAnimationFrame(() => requestAnimationFrame(() => fitZoomToLayout(result.layout)));
+        } else {
+          // Built-in floor plan (no theme selected): size the scene to its shape
+          setMapAspect(office.layout.cols / office.layout.rows);
         }
       } catch (err) {
         console.warn('[OfficePage] Failed to load default office zip:', err);
@@ -1249,7 +1252,7 @@ export default function OfficePage() {
       <AblyLoader />
       <BossFlowLayer adapter={sceneAdapter} isOwner={isOwner} />
       {/* Game Scene — fills remaining space after sidebar, centered */}
-      {sceneVisible && !consoleMode && <div style={{ flex: 1, position: "relative", minWidth: 0, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", marginRight: "calc(min(40vw, 800px) + 30px)" }}>
+      {sceneVisible && !consoleMode && <div style={{ flex: 1, position: "relative", minWidth: 0, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", marginRight: isMobile ? 0 : "calc(min(40vw, 800px) + 30px)" }}>
         {/* Loading overlay — fades out to reveal scene */}
         <div style={{
           position: "absolute", inset: 0, zIndex: 5,
@@ -1257,7 +1260,7 @@ export default function OfficePage() {
           animation: "scene-overlay-fadeout 2s ease-out 0.1s forwards",
           pointerEvents: "none",
         }} />
-        <div style={{ width: `min(100%, calc(100vh * ${mapAspect}))`, height: `min(100%, calc(100vw / ${mapAspect}))`, aspectRatio: `${mapAspect}`, position: "relative", maxHeight: "100vh" }}>
+        <div style={isMobile ? { width: "100%", height: "100%", position: "relative" } : { width: `min(100%, calc(100vh * ${mapAspect}))`, height: `min(100%, calc(100vw / ${mapAspect}))`, aspectRatio: `${mapAspect}`, position: "relative", maxHeight: "100vh" }}>
         <PixelOfficeScene
           onAdapterReady={handleAdapterReady}
           onAgentClick={handleAgentClick}
