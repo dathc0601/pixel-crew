@@ -1,7 +1,7 @@
 # Fork Improvement Plan: from "Open Office" to a pixel-art AI mini company
 
 Date: 2026-11-07
-Status: owner decisions recorded (§0). Phase 0 merged (2026-11-07). Phase 1 (daemon and UI) implemented on branch `phase-1-boss-flow` (2026-11-07), with a token-free demo mode (`pnpm dev:demo`). Phase 3 (office layout, rooms, art) implemented on branch `phase-3-office-art` (2026-11-07). Phase 4 (performance) implemented on branch `phase-4-performance` (2026-11-07); measurements in `docs/perf/baseline-2026-11-07.md`. See the status lines under each item.
+Status: owner decisions recorded (§0). Phase 0 merged (2026-11-07). Phase 1 (daemon and UI) implemented on branch `phase-1-boss-flow` (2026-11-07), with a token-free demo mode (`pnpm dev:demo`). Phase 3 (office layout, rooms, art) implemented on branch `phase-3-office-art` (2026-11-07). Phase 4 (performance) implemented on branch `phase-4-performance` (2026-11-07); measurements in `docs/perf/baseline-2026-11-07.md`. Phase 5 (cross-platform builds, mobile remote, pairing v2) implemented on branch `phase-5-cross-platform` (2026-11-07); see `docs/desktop.md` and `docs/mobile.md`. See the status lines under each item.
 Scope: `~/WebstormProjects/OpenOffice`. `origin` is `github.com/dathc0601/pixel-crew` (renamed from OpenOffice on 2026-11-07); `upstream` is `github.com/longyangxi/OpenOffice` (formerly "bit-office", MIT).
 
 Legend used throughout:
@@ -485,6 +485,7 @@ Each task lists its goal, the files involved, the approach, acceptance criteria,
 ### Phase 5 — Cross-platform builds and mobile remote (about 2–4 weeks)
 
 **P5.1 Windows/Linux daemon correctness (M–L).**
+- **Status: DONE (CI), real Windows 11 smoke test still owner-run.** `packages/orchestrator/src/proc.ts`: in-process PATH/PATHEXT lookup, npm `.cmd` shims unwrapped to `node <script>` (cmd.exe drops newlines in prompts), cross-spawn for other batch files, tree kills (process group / `taskkill /T /F`); git runs without a shell everywhere (`worktree.ts`); path guards via `isPathInside` (`path.relative`); Claude project key = non-alphanumerics → `-`, >200 chars hashed [V: read from the Claude Code 2.1.319 bundle; Windows keys follow the same code but were not run on Windows]; `ps`/`lsof` external discovery off on Windows; bash scripts → Node (`scripts/dev.mjs`, desktop scripts, cross-env). E2E `apps/gateway/src/__tests__/e2e-boss-flow.test.ts` (real gateway, demo mode, Boss → Lead → 4 devs → reviewer, ~2 s) runs as its own CI step; CI is green on ubuntu, macOS and windows with the Windows test allowance removed.
 - *Files:* `agent-session.ts` (`which` at `:475`, process-group kills at `:735/:1061/:1107`), `backends.ts`, `process-scanner.ts`, `external-output-reader.ts:93` (Claude project-key derivation on Windows paths [U: confirm Claude's Windows key format]), `index.ts` (`cwd.split("/")`), `ws-server.ts:301,551` (path guards with `path.relative`), `worktree.ts` (paths and git invocation).
 - *Approach:*
   - Use `cross-spawn` or `shell: true` with safe quoting for `.cmd` shims. Since CVE-2024-27980, Node refuses to spawn `.cmd` without a shell [U for the exact failure on these installs].
@@ -494,12 +495,14 @@ Each task lists its goal, the files involved, the approach, acceptance criteria,
 - *Acceptance:* CI on `windows-latest` and `ubuntu-latest` runs the fake-backend end-to-end test. A manual smoke test on Windows 11 with one real CLI (owner-run).
 
 **P5.2 Desktop: thin tray shell for macOS, Windows and Linux (M–L).**
+- **Status: DONE (unsigned).** `libc` Unix-only, Windows quit = stdin EOF (`PIXEL_CREW_EXIT_ON_STDIN_EOF`) then `taskkill /T /F` after 3 s; PATH from the login shell on macOS/Linux; system Node 22+ detected first (PATH, nvm, fnm, Volta, asdf, mise, Homebrew, Program Files; `PIXEL_CREW_NODE` override), bundled Node only for `PIXEL_CREW_BUNDLE_NODE=1` builds; no shell permissions in the webview, no `'unsafe-eval'`, `withGlobalTauri: false`; targets app/dmg/nsis/deb/appimage; Cargo.lock regenerated. `.github/workflows/release.yml` (tauri-action, `v*` tags + dispatch, artifacts only) is green: NSIS 4.5 MB, dmg 9.1 MB (arm64) / 9.2 MB (x64), deb 7.5 MB, AppImage 85.5 MB (bundles WebKitGTK; over the §9 20 MB budget). Local macOS build: dmg 8.9 MB, .app 19 MB. Unsigned-build notes in `docs/desktop.md`. Windows/Linux runs not tried on real machines.
 - *Files:* `apps/desktop/src-tauri/src/main.rs` (gate `libc` behind `#[cfg(unix)]`, add a Windows kill path, non-macOS PATH logic), `tauri.conf.json` (targets `dmg, app, nsis/msi, deb, appimage`), `capabilities/default.json` (drop `shell:allow-execute` and `shell:allow-stdin-write` from the webview; scope spawn to the sidecar only), CSP (drop `'unsafe-eval'` if Next allows it [U]).
 - *Approach for Node:* see §7.5. Default to **system Node** (detected), with a download-on-first-run fallback, rather than bundling a 57 MB+ binary. Alternative: Node SEA.
 - *Acceptance:* `tauri-action` builds artifacts for all three OSes on tag. Installer size is at or under the §9 budget.
 - *Risk:* Code signing and notarization (Apple and Windows certificates cost money). Ship unsigned for hobby use and document it.
 
 **P5.3 Mobile PWA remote (M).**
+- **Status: DONE in emulation; real iOS/Android owner-run.** Phones always get the office view (it was hidden behind console mode), 15 fps cap on touch-first screens (`deviceMaxFps`), approvals tray with Approve/Deny, 44 px touch targets on coarse pointers, Boss shortcuts in one row. LAN stays opt-in (`--lan`); `/connect` still loopback-only and now also refuses proxied requests (Tailscale serve, reverse proxies). Access paths (LAN http, Tailscale serve with `publicUrl`, Cloudflare tunnel + Access) in `docs/mobile.md`, with Tailscale claims marked. Verified in Playwright iPhone/Pixel emulation, incl. the production build over the LAN IP.
 - *Approach:*
   - Spectator and controller mode on phones: status, Boss composer, approvals and the office view (with reduced FPS).
   - Secure contexts: a LAN `http://192.168…` origin is not a secure context, so there is no service worker and no install [I]. Document three supported paths:
@@ -509,6 +512,7 @@ Each task lists its goal, the files involved, the approach, acceptance criteria,
 - *Acceptance:* An iOS Safari and Android Chrome manual test shows the office, assigns a task and approves a permission.
 
 **P5.4 Pairing v2 (M).**
+- **Status: DONE.** `…/pair#<128-bit token>` links (2 min, single use, in memory, hashed) as QR codes in Office settings → Paired devices and in the terminal (`q`); `/pair/exchange` (rate-limited) issues a device-bound session (device record: name, role, kind, last seen, expiry; stored as SHA-256 on disk); devices list with per-device revoke next to Revoke all; roles kept (owner-only `CREATE_PAIR_LINK` / `LIST_DEVICES` / `REVOKE_DEVICE`, `rbac.ts`). Tests: `pairing.test.ts`, `pairing-server.test.ts` (expiry, single use, replay, revoke, roles, rate limit, proxy refusal); P0.1 tests unchanged except the token file format version (2 → 3). "Device-bound" means one revocable record per device, not a hardware key: key-pair binding needs WebCrypto, which LAN http (not a secure context) lacks.
 - *Files:* `ws-server.ts`, `app/pair/page.tsx`.
 - *Approach:*
   - The desktop or CLI shows a **QR code** encoding `https://host:port/pair#<one-time 128-bit token>`, valid for 2 minutes and single use.
@@ -517,6 +521,16 @@ Each task lists its goal, the files involved, the approach, acceptance criteria,
 - *Acceptance:* Tokens can be revoked, expire, and are not replayable; P0.1's tests still pass.
 
 **P5.5 Decide native mobile (S, decision only).** Recommendation: **no Tauri mobile app** for now. Revisit only if push notifications on iOS are required; web push works on iOS 16.4+ for installed PWAs [U].
+- **Status: DECIDED (2026-11-07): no native Tauri mobile app for now; the PWA is the phone client.** Reasons:
+  - the phone is only a remote (agents never run on it), and everything it needs works in the browser: office view, Boss composer, approvals, settings, QR pairing;
+  - a native app would need App Store / Play review, Apple and Google developer accounts and signing, which conflicts with unsigned hobby distribution (§0, P5.2 risk);
+  - one codebase: the web UI already ships with the gateway, so the phone always matches the daemon's protocol version;
+  - Tauri mobile adds Xcode/Android Studio toolchains to CI for little gain.
+- **Revisit when** any of these holds:
+  - iOS push notifications for approvals are required and web push for installed PWAs (iOS 16.4+ [U]) proves unreliable or needs a secure context the owner cannot provide;
+  - a feature needs native APIs the web lacks (background tasks, widgets, local network discovery without typing an address);
+  - LAN-only users need offline install without HTTPS;
+  - several users ask for a store-installable app.
 
 ### Phase 6 — Community and open-source polish (about 1 week, rolling)
 
@@ -616,8 +630,8 @@ Findings ordered by severity. Each one comes from reading code; none was exploit
    - As root, the gateway silently rewrites `~/.claude/settings.json` to `bypassPermissions` (`backends.ts:13-40`).
    - Fix: P0.2 + P2.3.
 4. **Medium — Telegram**: an empty allowlist means *everyone* can control the bot (`telegram-channel.ts:29-30,248`). Fix: deny by default.
-5. **Medium — pairing:** a 6-character code (`index.ts:74`) with no rate limit on `/pair/validate` or `/share/validate`. Session tokens are persisted forever in `session-tokens.json`, with no expiry or revocation. Fix: P0.1 + P5.4.
-6. **Medium — Tauri:** the webview has `shell:allow-spawn` / `allow-execute` / `allow-stdin-write`, plus `withGlobalTauri: true` and CSP `'unsafe-eval'`. Any XSS in the UI is closer to native execution. Fix: P5.2. Exact exploitability depends on shell scopes [U].
+5. **Medium — pairing:** a 6-character code (`index.ts:74`) with no rate limit on `/pair/validate` or `/share/validate`. Session tokens are persisted forever in `session-tokens.json`, with no expiry or revocation. Fix: P0.1 + P5.4. **Fixed:** 8-char codes + rate limits (P0.1); one-time QR links, per-device sessions stored hashed, per-device revoke (P5.4).
+6. **Medium — Tauri:** the webview has `shell:allow-spawn` / `allow-execute` / `allow-stdin-write`, plus `withGlobalTauri: true` and CSP `'unsafe-eval'`. Any XSS in the UI is closer to native execution. Fix: P5.2. Exact exploitability depends on shell scopes [U]. **Fixed (P5.2):** the webview has only `core:default` + `notification:default`, no global Tauri object, no `'unsafe-eval'`.
 7. **Low — third-party relay:** Ably routes commands through a cloud provider. Keep it optional and off by default, and document it.
 8. **Low — logs:** the gateway logs full commands, including prompts, to `gateway.log` (`index.ts:424`). Redact, and rotate.
 
@@ -638,12 +652,12 @@ Findings ordered by severity. Each one comes from reading code; none was exploit
 | Shared framework JS | 106 kB [V] | unchanged with Next |
 | `out/` total | 2.7 MB [V] (2.5 MB + 160 KB self-hosted fonts; themes are data-only JSON) | ≤ 2.5 MB core; themes downloaded on demand |
 | Idle render (agents idle) | 0 renders / 0 ticks per 3 s [V] | 0 rAF between events ✓; next-deadline timers ✓; < 1% main-thread CPU |
-| Active render | typing 22 renders / 22 ticks per 3 s; walking 30 fps cap; 0 when hidden or off-screen [V] | ≤ 30 FPS cap ✓; 15 FPS on mobile / battery saver; 0 when hidden ✓ |
+| Active render | typing 22 renders / 22 ticks per 3 s; walking 30 fps cap (15 on touch screens / save-data, P5.3); 0 when hidden or off-screen [V] | ≤ 30 FPS cap ✓; 15 FPS on mobile / battery saver ✓; 0 when hidden ✓ |
 | Frame render time | 0.6–1.0 ms with the static layer vs 1.5–1.7 ms full redraw (M-series, Chromium) [V] | — |
 | Daemon idle CPU (0 running agents) | 0.02–0.03 % in demo mode [V]; `ps` scanner only while a viewer is connected, off with `externalAgents: false` | < 0.5% avg ✓; no polling when external discovery is off ✓ |
 | Daemon RSS (0 / 3 / 6 agents, demo) | 79.1 / 78.5 / 77.6 MB [V] | ≤ 120 MB / ≤ 200 MB (excluding the agent CLIs themselves) ✓ |
 | WS traffic, idle | not measured [U]; logs only for open panes (P4.5) | ≤ 1 msg / 30 s (keepalive) |
-| Desktop installer | ≥ 57 MB of bundled Node alone [V] + Tauri (~10 MB) [U] | ≤ 20 MB with system Node; ≤ 80 MB with bundled runtime |
+| Desktop installer | system Node (P5.2, CI): NSIS 4.5 MB, dmg 9.1–9.2 MB, deb 7.5 MB ✓; AppImage 85.5 MB (bundles WebKitGTK) ✗ [V] | ≤ 20 MB with system Node; ≤ 80 MB with bundled runtime |
 | Time to interactive (local) | not measured | < 1.5 s on a 2020 laptop |
 
 ---

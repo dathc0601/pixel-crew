@@ -64,6 +64,13 @@ TASK_DONE includes structured result (changedFiles, diffStat, testResult).
 - CI size gate: `pnpm --filter web size` vs `apps/web/perf-budget.json` (+5%). Source maps for analysis: `PIXEL_CREW_SOURCE_MAPS=1 pnpm --filter web build`.
 - Logs: LOG_APPEND batched ~100 ms (`apps/gateway/src/log-stream.ts`); clients send `SUBSCRIBE_LOGS` for open panes. Measurements: `docs/perf/`.
 
+## Cross-platform, mobile and pairing (Phase 5)
+- Spawning/killing: always `packages/orchestrator/src/proc.ts` (`spawnPortable`, `killTree`, `resolveCommand`); never `which`, `lsof` for logic, `process.kill(-pid)` or shell-string git (`worktree.ts` uses `execFileSync("git", args)`). Path guards: `isPathInside` (`apps/gateway/src/security.ts`). CI runs ubuntu, macOS and windows, all required.
+- E2E: `pnpm --filter pixel-crew test:e2e` (real gateway in demo mode; `PIXEL_CREW_DEMO_DELAY_SCALE` shortens the script).
+- Pairing v2: `…/pair#<token>` one-time links (`PairingTokenStore`), `/pair/exchange`, device-bound sessions (`SessionTokenStore`, hashed on disk), owner-only `CREATE_PAIR_LINK` / `LIST_DEVICES` / `REVOKE_DEVICE` (`rbac.ts`); QR in `ui/DevicesSection.tsx` and the terminal (`q`). `publicUrl` = Tailscale serve / proxy address. `/connect` refuses proxied requests.
+- Phone UI: office view always on mobile, `ui/ApprovalsTray.tsx`, 44 px targets under `@media (pointer: coarse)` in `styles/global.css`, 15 fps cap (`deviceMaxFps`). Docs: `docs/mobile.md`, `docs/desktop.md`.
+- Desktop: Tauri tray shell on system Node 22+; release builds via `.github/workflows/release.yml` (unsigned artifacts, no releases).
+
 ## Team Execution Flow
 Phases: CREATE → DESIGN → EXECUTE → COMPLETE → (loop or END).
 Execute: Leader → Dev (build+self-fix) → Reviewer (VERDICT) → Fix loop (max 3 reviews).
