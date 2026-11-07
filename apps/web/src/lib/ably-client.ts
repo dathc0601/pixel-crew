@@ -1,5 +1,5 @@
 import * as Ably from "ably";
-import { GatewayEventSchema } from "@pixel-crew/shared";
+import { parseGatewayEvent } from "@pixel-crew/shared";
 import { useOfficeStore } from "@/store/office-store";
 import { getGatewayHttpUrl } from "@/lib/storage";
 
@@ -38,7 +38,11 @@ export async function connectToAbly(machineId: string, sessionToken?: string) {
   const eventsChannel = client.channels.get(`machine:${machineId}:events`);
   eventsChannel.subscribe((msg: Ably.Message) => {
     try {
-      const event = GatewayEventSchema.parse(msg.data);
+      const event = parseGatewayEvent(msg.data);
+      if (!event) {
+        console.debug("[Web] Dropped unknown or invalid event:", (msg.data as { type?: string } | undefined)?.type);
+        return;
+      }
       useOfficeStore.getState().handleEvent(event);
     } catch (err) {
       console.error("[Web] Invalid event:", err);

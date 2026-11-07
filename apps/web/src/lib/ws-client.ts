@@ -1,4 +1,4 @@
-import { GatewayEventSchema } from "@pixel-crew/shared";
+import { parseGatewayEvent } from "@pixel-crew/shared";
 import { useOfficeStore } from "@/store/office-store";
 
 let ws: WebSocket | null = null;
@@ -70,7 +70,12 @@ function doConnect() {
         window.location.href = "/pair";
         return;
       }
-      const event = GatewayEventSchema.parse(msg);
+      // Unknown (newer daemon) or malformed events are dropped, never thrown
+      const event = parseGatewayEvent(msg);
+      if (!event) {
+        console.debug("[WS] Dropped unknown or invalid event:", msg?.type);
+        return;
+      }
       useOfficeStore.getState().handleEvent(event);
     } catch (err) {
       console.error("[WS] Invalid event:", err);
