@@ -41,6 +41,8 @@ const nextConfig: NextConfig = {
     NEXT_PUBLIC_APP_BUILD_TIME: new Date().toISOString(),
   },
   devIndicators: false,
+  // Lint runs once for the whole repo (root eslint.config.mjs, `pnpm lint`), not inside next build
+  eslint: { ignoreDuringBuilds: true },
   reactStrictMode: true,
   transpilePackages: ["@pixel-crew/shared"],
   output: isDev ? undefined : "export",

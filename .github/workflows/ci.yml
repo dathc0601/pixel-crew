@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main, "phase-*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      # Tests never start a real AI CLI: orchestrator flows use the fake backend.
+      # Windows is allowed to fail until the Phase 5 portability work (POSIX-only
+      # process-group kills, path guards); tracked in the fork plan.
+      - name: Test
+        run: pnpm test
+        continue-on-error: ${{ matrix.os == 'windows-latest' }}
+
+      - name: Build web
+        run: pnpm --filter web build
+
+      - name: Build gateway
+        run: pnpm --filter pixel-crew build
