@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { AgentStatusEnum, RiskLevelEnum, TeamPhaseEnum } from "./types";
+import { AgentStatusEnum, RiskLevelEnum, TeamPhaseEnum, WorkItemSchema, HandoffKindEnum, LeadWaitingReasonEnum } from "./types";
+import { OfficeConfigSchema } from "./office-config";
 
 export const AgentStatusEvent = z.object({
   type: z.literal("AGENT_STATUS"),
@@ -307,6 +308,69 @@ export const SessionsRevokedEvent = z.object({
   revoked: z.number(),
 });
 
+// ---------------------------------------------------------------------------
+// Phase 1: Boss → Lead → Dev choreography. Cosmetic for the scene; the daemon owns the state.
+// ---------------------------------------------------------------------------
+
+export const WorkItemUpdatedEvent = z.object({
+  type: z.literal("WORK_ITEM_UPDATED"),
+  item: WorkItemSchema,
+});
+
+/**
+ * Someone walks a paper over. Real work on the receiving side starts after durationMs
+ * (office.handoff.durationMs; 0 = instant). The daemon never waits for the client.
+ */
+export const HandoffEvent = z.object({
+  type: z.literal("HANDOFF"),
+  handoffId: z.string(),
+  /** Agent id, or "boss" for the Boss */
+  fromId: z.string(),
+  toId: z.string(),
+  workItemId: z.string(),
+  kind: HandoffKindEnum,
+  label: z.string(),
+  durationMs: z.number().int().min(0),
+});
+
+/** Work is queued and no suitable dev is idle (queueLength 0 + reason "none" = waiting is over). */
+export const LeadWaitingEvent = z.object({
+  type: z.literal("LEAD_WAITING"),
+  leadId: z.string().nullable(),
+  queueLength: z.number().int().min(0),
+  reason: LeadWaitingReasonEnum,
+});
+
+/** The Lead starts doing a queued sub-task itself (lead.selfWork policy allowed it). */
+export const LeadSelfWorkEvent = z.object({
+  type: z.literal("LEAD_SELF_WORK"),
+  leadId: z.string(),
+  workItemId: z.string(),
+});
+
+/** The Lead called Claude's subagent tool (Agent, formerly Task). */
+export const LeadSubagentStartedEvent = z.object({
+  type: z.literal("LEAD_SUBAGENT_STARTED"),
+  leadId: z.string(),
+  /** The Boss item the Lead was working on, if any */
+  workItemId: z.string().nullable(),
+  description: z.string(),
+  subagentType: z.string().optional(),
+});
+
+/**
+ * The effective office config. Broadcast after every change (SET_OFFICE_CONFIG or a manual
+ * file edit); sent only to the caller for GET_OFFICE_CONFIG and for rejected requests.
+ */
+export const OfficeConfigEvent = z.object({
+  type: z.literal("OFFICE_CONFIG"),
+  config: OfficeConfigSchema,
+  /** Why this caller's request was rejected (not owner, invalid values, write failure) */
+  error: z.string().optional(),
+  /** config.json currently fails validation; the last valid values stay in effect */
+  fileError: z.string().optional(),
+});
+
 export const GatewayEventSchema = z.discriminatedUnion("type", [
   AgentsSyncEvent,
   AgentStatusEvent,
@@ -341,6 +405,12 @@ export const GatewayEventSchema = z.discriminatedUnion("type", [
   SkillListEvent,
   ChatHistoryLoadedEvent,
   SessionsRevokedEvent,
+  WorkItemUpdatedEvent,
+  HandoffEvent,
+  LeadWaitingEvent,
+  LeadSelfWorkEvent,
+  LeadSubagentStartedEvent,
+  OfficeConfigEvent,
 ]);
 
 export type TokenUsage = z.infer<typeof TokenUsage>;
@@ -377,4 +447,19 @@ export type WorktreeRevertedEvent = z.infer<typeof WorktreeRevertedEvent>;
 export type AutoMergeUpdatedEvent = z.infer<typeof AutoMergeUpdatedEvent>;
 export type SkillListEvent = z.infer<typeof SkillListEvent>;
 export type SessionsRevokedEvent = z.infer<typeof SessionsRevokedEvent>;
+export type WorkItemUpdatedEvent = z.infer<typeof WorkItemUpdatedEvent>;
+export type HandoffEvent = z.infer<typeof HandoffEvent>;
+export type LeadWaitingEvent = z.infer<typeof LeadWaitingEvent>;
+export type LeadSelfWorkEvent = z.infer<typeof LeadSelfWorkEvent>;
+export type LeadSubagentStartedEvent = z.infer<typeof LeadSubagentStartedEvent>;
+export type OfficeConfigEvent = z.infer<typeof OfficeConfigEvent>;
 export type GatewayEvent = z.infer<typeof GatewayEventSchema>;
+
+/**
+ * Validate an incoming event. Returns null for unknown event types (a newer daemon)
+ * or malformed payloads, so clients can drop them instead of throwing.
+ */
+export function parseGatewayEvent(raw: unknown): GatewayEvent | null {
+  const result = GatewayEventSchema.safeParse(raw);
+  return result.success ? result.data : null;
+}

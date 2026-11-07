@@ -229,6 +229,35 @@ export const RevokeSessionsCommand = z.object({
   type: z.literal("REVOKE_SESSIONS"),
 });
 
+/**
+ * The Boss (UI user) assigns a task to the Team Lead. The daemon emits a boss_to_lead
+ * HANDOFF and starts the Lead after office.handoff.durationMs.
+ * allowLeadSelfWork / allowSubagents can only narrow office.lead (see lead-policy.ts),
+ * except that "urgent_only" needs urgent=true plus the flag set to true.
+ */
+export const BossAssignCommand = z.object({
+  type: z.literal("BOSS_ASSIGN"),
+  prompt: z.string().trim().min(1).max(20_000),
+  urgent: z.boolean().default(false),
+  allowLeadSelfWork: z.boolean().optional(),
+  allowSubagents: z.boolean().optional(),
+});
+
+/** Owner-only: read the office section of config.json (reply: OFFICE_CONFIG). */
+export const GetOfficeConfigCommand = z.object({
+  type: z.literal("GET_OFFICE_CONFIG"),
+});
+
+/**
+ * Owner-only: deep-merge `office` into config.json's office section (null removes a key,
+ * so it falls back to its default). Validated with OfficeConfigSchema before writing;
+ * on success every client gets OFFICE_CONFIG, on error only the caller does (with `error`).
+ */
+export const SetOfficeConfigCommand = z.object({
+  type: z.literal("SET_OFFICE_CONFIG"),
+  office: z.record(z.string(), z.unknown()),
+});
+
 export const CommandSchema = z.discriminatedUnion("type", [
   RunTaskCommand,
   ApprovalDecisionCommand,
@@ -265,6 +294,9 @@ export const CommandSchema = z.discriminatedUnion("type", [
   SyncChatHistoryCommand,
   LoadChatHistoryCommand,
   RevokeSessionsCommand,
+  BossAssignCommand,
+  GetOfficeConfigCommand,
+  SetOfficeConfigCommand,
 ]);
 
 export type RunTaskCommand = z.infer<typeof RunTaskCommand>;
@@ -300,4 +332,7 @@ export type ListSkillsCommand = z.infer<typeof ListSkillsCommand>;
 export type SaveSkillCommand = z.infer<typeof SaveSkillCommand>;
 export type DeleteSkillCommand = z.infer<typeof DeleteSkillCommand>;
 export type RevokeSessionsCommand = z.infer<typeof RevokeSessionsCommand>;
+export type BossAssignCommand = z.infer<typeof BossAssignCommand>;
+export type GetOfficeConfigCommand = z.infer<typeof GetOfficeConfigCommand>;
+export type SetOfficeConfigCommand = z.infer<typeof SetOfficeConfigCommand>;
 export type Command = z.infer<typeof CommandSchema>;
