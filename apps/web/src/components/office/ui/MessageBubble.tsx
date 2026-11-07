@@ -8,6 +8,7 @@ import type { ChatMessage } from "@/store/office-store";
 import { TERM_FONT, TERM_SIZE, TERM_GREEN, TERM_DIM, TERM_TEXT, TERM_TEXT_BRIGHT, TERM_ERROR, TERM_PANEL, TERM_SURFACE, TERM_BORDER, TERM_BORDER_DIM, TERM_SEM_GREEN, TERM_SEM_YELLOW, TERM_SEM_RED, TERM_SEM_BLUE, TERM_SEM_PURPLE } from "./termTheme";
 import { linkifyText, formatDuration, formatTokenCount, computePreviewUrl, hasWebPreview, buildPreviewCommand } from "./office-utils";
 import { BACKEND_OPTIONS } from "./office-constants";
+import { describePrompt } from "./promptDisplay";
 
 /** Typewriter reveal — adaptive speed: slow for small chunks, faster for large backlogs. */
 function TypewriterText({ text }: { text: string }) {
@@ -282,12 +283,38 @@ const reviewBtnStyle: React.CSSProperties = {
   border: "1px solid color-mix(in srgb, var(--term-text) 40%, transparent)",
 };
 
+/** An internal team prompt (Boss wrapper, result batch, hand-off): the human line, with the raw prompt on demand. */
+function InternalPromptMsg({ ts, tag, text, raw }: { ts: string; tag: string; text: string; raw: string }) {
+  const [showRaw, setShowRaw] = useState(false);
+  return (
+    <div className="term-msg" style={{
+      marginTop: 12, marginBottom: 8, fontSize: TERM_SIZE, fontFamily: TERM_FONT, lineHeight: 1.7,
+      borderLeft: `2px solid ${TERM_BORDER}`, padding: "6px 12px",
+    }}>
+      <span className="term-ts" style={{ color: TERM_DIM, marginRight: 6 }}>{ts}</span>
+      <span style={{ color: TERM_SEM_YELLOW, marginRight: 6 }}>[{tag}]</span>
+      <span style={{ color: TERM_TEXT, wordBreak: "break-word" }}>{linkifyText(text)}</span>
+      <button
+        type="button"
+        onClick={() => setShowRaw((v) => !v)}
+        aria-expanded={showRaw}
+        style={{ marginLeft: 8, padding: "0 6px", minHeight: 20, background: "transparent", border: `1px solid ${TERM_BORDER_DIM}`, color: TERM_DIM, fontFamily: TERM_FONT, fontSize: 11, cursor: "pointer" }}
+      >{showRaw ? "hide raw" : "show raw"}</button>
+      {showRaw && (
+        <pre style={{ margin: "6px 0 0", padding: 8, background: TERM_PANEL, color: TERM_DIM, whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: TERM_FONT, fontSize: 11, maxHeight: 320, overflow: "auto" }}>{raw}</pre>
+      )}
+    </div>
+  );
+}
+
 const MessageBubble = memo(function MessageBubble({ msg, agentName, onPreview, onReview, isTeamLead, isTeamMember, teamPhase, detectedBackends }: { msg: ChatMessage; agentName?: string; onPreview?: (url: string) => void; onReview?: (result: NonNullable<ChatMessage["result"]>, backend?: string) => void; isTeamLead?: boolean; isTeamMember?: boolean; teamPhase?: string | null; detectedBackends?: string[] }) {
   const ts = new Date(msg.timestamp).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   const base: React.CSSProperties = { marginBottom: 4, fontSize: TERM_SIZE, fontFamily: TERM_FONT, lineHeight: 1.7 };
 
   // ── User input ──
   if (msg.role === "user") {
+    const internal = describePrompt(msg.text);
+    if (internal) return <InternalPromptMsg ts={ts} tag={internal.tag} text={internal.text} raw={msg.text} />;
     const isFromTeam = msg.text.startsWith("[From ");
     if (isFromTeam && msg.text.length > 80) {
       return <SysMsg ts={ts} tag="task" text={msg.text} firstLine={msg.text.slice(0, 80) + "..."} isLong={true} />;
