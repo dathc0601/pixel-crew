@@ -70,6 +70,12 @@ export class ExternalOutputReader {
   private readers = new Map<string, ReaderState>();
   private onStatus: StatusCallback | null = null;
   private onTokenUpdate: TokenUpdateCallback | null = null;
+  private readonly projectsRoot: string | undefined;
+
+  /** projectsRoot: Claude's projects folder (default ~/.claude/projects; demo mode uses a fake one) */
+  constructor(opts: { projectsRoot?: string } = {}) {
+    this.projectsRoot = opts.projectsRoot;
+  }
 
   /** Set a callback to be notified when an external agent's status changes (driven by JSONL entries) */
   setOnStatus(cb: StatusCallback): void {
@@ -87,13 +93,14 @@ export class ExternalOutputReader {
     cwd: string | null,
     backendId: string,
     onOutput: OutputCallback,
+    opts: { transcript?: () => string | null } = {},
   ): void {
     if (this.readers.has(agentId)) return;
 
     let cleanup: () => void;
 
     if (backendId === "claude" && cwd) {
-      cleanup = this.startClaudeReader(agentId, cwd, onOutput);
+      cleanup = this.startClaudeReader(agentId, cwd, onOutput, opts.transcript);
     } else if (process.platform !== "win32") {
       cleanup = this.startLsofReader(agentId, pid, onOutput);
     } else {
@@ -123,9 +130,11 @@ export class ExternalOutputReader {
     agentId: string,
     cwd: string,
     onOutput: OutputCallback,
+    /** This session's own transcript (from Claude's session registry), if known */
+    pinned?: () => string | null,
   ): () => void {
     // Claude stores sessions in ~/.claude/projects/{key}/*.jsonl (key: see claudeProjectKey)
-    const projectDir = claudeProjectDir(cwd);
+    const projectDir = claudeProjectDir(cwd, this.projectsRoot);
 
     console.log(`[OutputReader] Claude reader for ${agentId}: watching ${projectDir}`);
 
@@ -239,7 +248,8 @@ export class ExternalOutputReader {
           return;
         }
 
-        watchedFile = path.join(projectDir, files[0].name);
+        const pinnedNow = pinned?.();
+        watchedFile = pinnedNow && existsSync(pinnedNow) ? pinnedNow : path.join(projectDir, files[0].name);
         // Start reading from end of file (only new content)
         lastPosition = statSync(watchedFile).size;
         console.log(`[OutputReader] Watching JSONL: ${watchedFile} (pos=${lastPosition})`);
@@ -248,8 +258,16 @@ export class ExternalOutputReader {
         try {
           watcher = watch(projectDir, (_event, filename) => {
             if (stopped) return;
-            // If a newer JSONL appears, switch to it
-            if (filename && filename.endsWith(".jsonl")) {
+            // A pinned session follows its own transcript (it changes after /clear); other
+            // sessions in the same folder, and Pixel Crew's fork runs, are ignored
+            const pinnedPath = pinned?.();
+            if (pinnedPath) {
+              if (pinnedPath !== watchedFile && existsSync(pinnedPath)) {
+                watchedFile = pinnedPath;
+                lastPosition = 0;
+              }
+            } else if (filename && filename.endsWith(".jsonl")) {
+              // If a newer JSONL appears, switch to it
               const fullPath = path.join(projectDir, filename);
               if (fullPath !== watchedFile && existsSync(fullPath)) {
                 try {

@@ -14,7 +14,7 @@
     "start": "tsx src/index.ts",
     "build": "tsc --noEmit && tsup && node scripts/copy-web.mjs && node scripts/copy-demo-agent.mjs",
     "typecheck": "tsc --noEmit",
-    "test:e2e": "node --import tsx --test src/__tests__/e2e-boss-flow.test.ts",
+    "test:e2e": "node --import tsx --test --test-concurrency=1 \"src/__tests__/e2e-*.test.ts\"",
     "test": "node --import tsx --test --test-concurrency=1 \"src/__tests__/*.test.ts\"",
     "dev:demo": "cross-env NODE_ENV=development WS_PORT=9099 tsx watch src/index.ts --demo",
     "demo": "tsx src/index.ts --demo"

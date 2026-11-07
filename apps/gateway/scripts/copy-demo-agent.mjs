@@ -6,7 +6,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const src = join(here, "..", "..", "..", "packages", "orchestrator", "fake-agent", "fake-agent.mjs");
-const dest = join(here, "..", "dist", "fake-agent.mjs");
-copyFileSync(src, dest);
-console.log(`[copy-demo-agent] ${src} -> ${dest}`);
+// fake-claude-session.mjs is demo mode's simulated external Claude session (attach flow)
+for (const name of ["fake-agent.mjs", "fake-claude-session.mjs"]) {
+  const src = join(here, "..", "..", "..", "packages", "orchestrator", "fake-agent", name);
+  const dest = join(here, "..", "dist", name);
+  copyFileSync(src, dest);
+  console.log(`[copy-demo-agent] ${src} -> ${dest}`);
+}

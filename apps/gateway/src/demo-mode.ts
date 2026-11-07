@@ -55,8 +55,8 @@ const DEMO_REVIEWER_NAME = "Sophie";
 
 /**
  * The script every demo agent follows (fake-agent.mjs; first matching rule wins).
- * The Lead splits each Boss task into four TASK: lines, so the Dispatcher fans them out
- * to four different idle devs. Devs "work" for a few seconds and walk their result back;
+ * The Lead splits each Boss task into five TASK: lines, so the Dispatcher fans them out
+ * to the idle devs (the fifth prefers an attached Claude session, else it waits its turn). Devs "work" for a few seconds and walk their result back;
  * the Lead then asks the reviewer for a review, and the reviewer's PASS closes the task.
  */
 export const DEMO_SCENARIO: { rules: DemoRule[]; default: Omit<DemoRule, "match"> } = {
@@ -71,16 +71,20 @@ export const DEMO_SCENARIO: { rules: DemoRule[]; default: Omit<DemoRule, "match"
     {
       match: "The Boss assigned you a task",
       text: [
-        "Got it, Boss. I'll split this into four parts:",
+        "Got it, Boss. I'll split this into five parts:",
         "TASK[ui]: Sketch the screens and layout",
         "TASK: Build the core feature",
         "TASK: Wire up the data and the API",
         "TASK: Write tests and polish the details",
+        // Prefers a dev whose role mentions Claude: the demo's attached terminal session
+        "TASK[claude]: Check the existing code for anything the new feature could break",
       ],
       delayMs: 1500,
     },
     // Reviewer
     { match: `VERDICT|Your name is ${DEMO_REVIEWER_NAME}|You are ${DEMO_REVIEWER_NAME} \\(`, text: ["VERDICT: PASS", "SUMMARY: (demo) Reviewed, looks good."], delayMs: 3000 },
+    // An attached Claude Code session in fork mode (prompt template worker-attached)
+    { match: "added this Claude Code session", text: ["STATUS: done", "SUMMARY: (demo) Checked it in a fork of my terminal session; nothing breaks."], delayMs: 5000, jitterMs: 2000 },
     // Developers (first run: "Your name is …"; later runs: "[Context reminder] You are …" / "[Assigned by …]")
     { match: "Your name is|Assigned by|Context reminder", text: ["STATUS: done", "SUMMARY: (demo) Finished my part."], delayMs: 6000, jitterMs: 4000 },
   ],

@@ -39,6 +39,7 @@ describe("demo mode", () => {
     assert.equal(def(DEMO_TEAM.members.find((id) => /review/i.test(def(id)!.role))!)?.name, "Sophie");
     assert.ok(roles.length - reviewers.length >= 3, "at least three devs");
     const fanOut = (ruleFor("The Boss assigned you a task:\nBuild it")?.text as string[]).filter((l) => /^TASK/.test(l)).length;
-    assert.ok(fanOut >= 3 && fanOut <= roles.length - reviewers.length, "one sub-task per dev");
+    // One sub-task per hired dev, plus one for the demo's attached Claude session (Phase 2a)
+    assert.ok(fanOut >= 3 && fanOut <= roles.length - reviewers.length + 1, "one sub-task per dev");
   });
 });

@@ -46,6 +46,8 @@ export interface ExternalAgent {
   startedAt: number;
   agentId: string;
   status: "working" | "idle";
+  /** Full command line (e.g. to see whether a Claude session bypasses permission prompts) */
+  args?: string;
 }
 
 export interface ScanCallbacks {
@@ -156,7 +158,7 @@ export class ProcessScanner {
       }
       const lines = psOutput.split("\n").slice(1); // skip header
 
-      const candidates: Array<{ pid: number; ppid: number; cpu: number; etime: string; command: string }> = [];
+      const candidates: Array<{ pid: number; ppid: number; cpu: number; etime: string; command: string; args: string }> = [];
 
       for (const line of lines) {
         const trimmed = line.trim();
@@ -178,7 +180,7 @@ export class ProcessScanner {
         const cmdName = this.matchCommand(args);
         if (!cmdName) continue;
 
-        candidates.push({ pid, ppid, cpu, etime, command: cmdName });
+        candidates.push({ pid, ppid, cpu, etime, command: cmdName, args });
       }
 
       // Filter out child processes whose parent is also a candidate
@@ -204,6 +206,7 @@ export class ProcessScanner {
           startedAt: parseEtime(c.etime),
           agentId,
           status,
+          args: c.args,
         });
       }
 

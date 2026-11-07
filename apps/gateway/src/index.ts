@@ -13,7 +13,7 @@ import { config, CONFIG_DIR, hasSetupRun, reloadConfig, saveConfig, officeConfig
 import { backendPermissionMode } from "@pixel-crew/shared";
 import { runSetup } from "./setup.js";
 import { detectBackends, getBackend, getAllBackends } from "./backends.js";
-import { createFakeBackend, FAKE_AGENT_SCRIPT, createOrchestrator, openExternal, getMergeHistory, previewServer, recordProjectRatings, parseAgentOutput, setSessionDir, setStorageRoot, syncAgentDefs, type Orchestrator, type OrchestratorEvent, type RuntimeOwnerInfo, type TeamPhaseChangedEvent } from "@pixel-crew/orchestrator";
+import { isPidAlive, createFakeBackend, FAKE_AGENT_SCRIPT, createOrchestrator, openExternal, getMergeHistory, previewServer, recordProjectRatings, parseAgentOutput, setSessionDir, setStorageRoot, syncAgentDefs, type Orchestrator, type OrchestratorEvent, type RuntimeOwnerInfo, type TeamPhaseChangedEvent } from "@pixel-crew/orchestrator";
 import type { Command, GatewayEvent, UserRole, WorkItem as WireWorkItem } from "@pixel-crew/shared";
 import type { WorkItem } from "@pixel-crew/orchestrator";
 import { broadcastOfficeConfigChanges, handleOfficeConfigCommand, isOfficeConfigCommand } from "./office-config-commands.js";
@@ -31,6 +31,10 @@ import { installFileLogger } from "./file-logger.js";
 import { startTunnel, stopTunnel, isTunnelRunning } from "./tunnel.js";
 import { loadTeamState, saveTeamState, clearTeamState, type TeamState, type PersistedAgent, bufferEvent, archiveProject, resetProjectBuffer, setProjectName, listProjects, loadProject, loadProjectBuffer, rateProject } from "./team-state.js";
 import { clearRuntimeState, killPreviousInstances, registerRuntimeState } from "./runtime-state.js";
+import { AttachManager, type ExternalSession } from "./attach/attach-manager.js";
+import { handleAttachCommand, isAttachCommand } from "./attach/attach-commands.js";
+import { claudeConfigDir, projectsRoot, readClaudeSession, transcriptPathFor } from "./attach/claude-sessions.js";
+import { demoClaudeHome, startDemoExternalSession } from "./attach/demo-external.js";
 
 // Register all channels — each one self-activates if configured
 registerChannel(wsChannel);
@@ -43,12 +47,20 @@ let outputReader: ExternalOutputReader | null = null;
 let runtimeState: RuntimeOwnerInfo | null = null;
 
 /** Track external agents so PING can broadcast them */
-const externalAgents = new Map<string, { agentId: string; name: string; backendId: string; pid: number; cwd: string | null; startedAt: number; status: "working" | "idle" }>();
+interface ExternalAgentInfo { agentId: string; name: string; backendId: string; pid: number; cwd: string | null; startedAt: number; status: "working" | "idle"; args?: string }
+const externalAgents = new Map<string, ExternalAgentInfo>();
+/** Claude Code sessions the owner put on the team (Phase 2a, docs/attach-sessions.md) */
+let attachManager: AttachManager | null = null;
+/** Claude config dir to read sessions from (a fake one in demo mode) */
+const CLAUDE_HOME = DEMO_MODE ? demoClaudeHome(CONFIG_DIR) : claudeConfigDir();
+/** Demo mode's simulated terminal session (our own child; stopped on exit) */
+let demoSessionPid: number | null = null;
 
 /** Snapshot current team state to disk (reads phase from orchestrator's PhaseMachine) */
 function persistTeamState() {
   const agents: PersistedAgent[] = orc.getAllAgents()
     .filter(a => !a.agentId.startsWith("reviewer-")) // Reviewers are ephemeral — never persist
+    .filter(a => !attachManager?.isAttached(a.agentId)) // attachments.json owns attached sessions
     .map(a => ({
       agentId: a.agentId,
       name: a.name,
@@ -411,10 +423,21 @@ function mapOrchestratorEvent(e: OrchestratorEvent): GatewayEvent | null {
       return { type: "TASK_QUEUED", agentId: e.agentId, taskId: e.taskId, prompt: e.prompt, position: e.position };
     case "agent:created":
       syncHiredAgentsToTelegram();
-      return { type: "AGENT_CREATED", agentId: e.agentId, name: e.name, role: e.role, palette: e.palette, personality: e.personality, backend: e.backend, isTeamLead: e.isTeamLead || undefined, teamId: e.teamId, workDir: agentWorkDirs.get(e.agentId) ?? config.defaultWorkspace, autoMerge: e.autoMerge };
-    case "agent:fired":
+      return { type: "AGENT_CREATED", agentId: e.agentId, name: e.name, role: e.role, palette: e.palette, personality: e.personality, backend: e.backend, isTeamLead: e.isTeamLead || undefined, teamId: e.teamId, workDir: agentWorkDirs.get(e.agentId) ?? config.defaultWorkspace, autoMerge: e.autoMerge, ...attachManager?.wireFields(e.agentId) };
+    case "agent:fired": {
       syncHiredAgentsToTelegram();
+      // An attached session that leaves the team is still running: show it as external again
+      if (attachManager?.onAgentFired(e.agentId)) {
+        const ext = externalAgents.get(e.agentId);
+        if (ext && isPidAlive(ext.pid)) {
+          publishExternalAgent(ext);
+          startExternalReader(ext);
+          return null;
+        }
+        externalAgents.delete(e.agentId);
+      }
       return { type: "AGENT_FIRED", agentId: e.agentId };
+    }
     case "task:result-returned":
       return { type: "TASK_RESULT_RETURNED", fromAgentId: e.fromAgentId, toAgentId: e.toAgentId, taskId: e.taskId, summary: e.summary, success: e.success };
     case "team:phase": {
@@ -501,6 +524,18 @@ function handleCommand(parsed: Command, meta: CommandMeta) {
     return;
   }
 
+  // Attach / detach Claude sessions: owner-only, with an explicit rejection for other sessions
+  if (isAttachCommand(parsed)) {
+    if (!attachManager) return;
+    handleAttachCommand(parsed, meta, {
+      manager: attachManager,
+      external: (id) => externalAgents.get(id),
+      reply: (event) => sendToClient(meta.clientId, event),
+      onAttached: (id) => outputReader?.detach(id),
+    });
+    return;
+  }
+
   // RBAC enforcement
   if (!isCommandAllowed(meta.role, parsed.type)) {
     console.log(`[RBAC] Blocked ${parsed.type} from ${meta.role} (client=${meta.clientId})`);
@@ -559,6 +594,11 @@ function handleCommand(parsed: Command, meta: CommandMeta) {
     }
     case "FIRE_AGENT": {
       console.log(`[Gateway] Firing agent: ${parsed.agentId}`);
+      // Firing an attached session only takes it off the team; its terminal keeps running
+      if (attachManager?.isAttached(parsed.agentId)) {
+        attachManager.detach(parsed.agentId, "fired");
+        break;
+      }
       const agentToFire = orc.getAgent(parsed.agentId);
       if (agentToFire?.pid) scanner?.addGracePid(agentToFire.pid);
       orc.removeAgent(parsed.agentId);
@@ -819,6 +859,7 @@ function handleCommand(parsed: Command, meta: CommandMeta) {
           lastMergeCommit: agent.lastMergeCommit,
           lastMergeMessage: agent.lastMergeMessage,
           undoCount: agent.undoCount ?? 0,
+          ...attachManager?.wireFields(agent.agentId),
         });
         publishEvent({
           type: "AGENT_STATUS",
@@ -841,25 +882,10 @@ function handleCommand(parsed: Command, meta: CommandMeta) {
           leadAgentId: tp.leadAgentId,
         });
       }
-      // Also broadcast external agents
+      // Also broadcast external agents (attached ones are team members above)
       for (const [, ext] of externalAgents) {
-        publishEvent({
-          type: "AGENT_CREATED",
-          agentId: ext.agentId,
-          name: ext.name,
-          role: ext.cwd ? path.basename(ext.cwd) || ext.backendId : ext.backendId,
-          isExternal: true,
-          palette: ext.pid % 6,
-          pid: ext.pid,
-          cwd: ext.cwd ?? undefined,
-          startedAt: ext.startedAt,
-          backend: ext.backendId,
-        });
-        publishEvent({
-          type: "AGENT_STATUS",
-          agentId: ext.agentId,
-          status: ext.status,
-        });
+        if (attachManager?.isAttached(ext.agentId)) continue;
+        publishExternalAgent(ext);
       }
       // Work pool, so reconnecting clients can rebuild the board (§7.7)
       for (const item of orc.getWorkItems()) publishEvent({ type: "WORK_ITEM_UPDATED", item: toWireWorkItem(item) });
@@ -1335,6 +1361,67 @@ function createTeam(leadId: string, memberIds: readonly string[], backends?: Rec
 }
 
 // ---------------------------------------------------------------------------
+// External sessions (CLI sessions the owner started elsewhere)
+// ---------------------------------------------------------------------------
+
+function toExternalSession(ext: ExternalAgentInfo): ExternalSession {
+  return { agentId: ext.agentId, pid: ext.pid, cwd: ext.cwd, backendId: ext.backendId, palette: ext.pid % 6, args: ext.args };
+}
+
+/** Show an external session (view-only, with the ways it can join the team). */
+function publishExternalAgent(ext: ExternalAgentInfo): void {
+  const attachOptions = attachManager?.options(toExternalSession(ext)) ?? [];
+  publishEvent({
+    type: "AGENT_CREATED",
+    agentId: ext.agentId,
+    name: ext.name,
+    role: ext.cwd ? path.basename(ext.cwd) || ext.backendId : ext.backendId,
+    isExternal: true,
+    attached: false,
+    palette: ext.pid % 6,
+    pid: ext.pid,
+    cwd: ext.cwd ?? undefined,
+    startedAt: ext.startedAt,
+    backend: ext.backendId,
+    ...(attachOptions.length ? { attachOptions } : {}),
+  });
+  publishEvent({ type: "AGENT_STATUS", agentId: ext.agentId, status: ext.status });
+}
+
+/** Tail an external session's output (Claude: its own transcript when the registry names it). */
+function startExternalReader(ext: ExternalAgentInfo): void {
+  const transcript = () => {
+    const entry = readClaudeSession(CLAUDE_HOME, ext.pid);
+    return entry ? transcriptPathFor(CLAUDE_HOME, entry.cwd, entry.sessionId) : null;
+  };
+  outputReader?.attach(ext.agentId, ext.pid, ext.cwd, ext.backendId, (chunk) => {
+    publishEvent({ type: "LOG_APPEND", agentId: ext.agentId, taskId: "external", stream: "stdout", chunk });
+  }, { transcript });
+}
+
+/** A newly found external session. Attached ones (restored after a restart) stay team members. */
+function addExternalAgent(ext: ExternalAgentInfo): void {
+  externalAgents.set(ext.agentId, ext);
+  if (attachManager?.isAttached(ext.agentId)) return;
+  console.log(`[ProcessScanner] External agent found: ${ext.name} (pid=${ext.pid}, cwd=${ext.cwd})`);
+  publishExternalAgent(ext);
+  startExternalReader(ext);
+}
+
+function removeExternalAgent(agentId: string): void {
+  const ext = externalAgents.get(agentId);
+  console.log(`[ProcessScanner] External agent gone: ${ext?.name ?? agentId}`);
+  outputReader?.detach(agentId);
+  if (attachManager?.isAttached(agentId)) {
+    attachManager.detach(agentId, "session ended"); // re-queues its running item; agent:fired publishes AGENT_FIRED
+    externalAgents.delete(agentId);
+    return;
+  }
+  externalAgents.delete(agentId);
+  publishEvent({ type: "AGENT_FIRED", agentId });
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -1573,10 +1660,10 @@ async function main() {
   orc.on("lead:subagent-started", forwardEvent);
 
   // Start external output reader
-  outputReader = new ExternalOutputReader();
+  outputReader = new ExternalOutputReader({ projectsRoot: projectsRoot(CLAUDE_HOME) });
   outputReader.setOnStatus((agentId, status) => {
     const ext = externalAgents.get(agentId);
-    if (ext && ext.status !== status) {
+    if (ext && ext.status !== status && !attachManager?.isAttached(agentId)) {
       ext.status = status;
       publishEvent({
         type: "AGENT_STATUS",
@@ -1594,6 +1681,31 @@ async function main() {
     });
   });
 
+  // Attached Claude sessions (Phase 2a): restore the ones whose session still runs
+  attachManager = new AttachManager({
+    host: {
+      team: () => {
+        const leadId = orc.getAllAgents().find((a) => a.isTeamLead)?.agentId;
+        const teamId = leadId ? orc.getAllAgents().find((a) => a.agentId === leadId)?.teamId : undefined;
+        return leadId && teamId ? { teamId, leadId } : null;
+      },
+      createAgent: (opts) => orc.createAgent(opts),
+      removeAgent: (id) => orc.removeAgent(id),
+      hasAgent: (id) => !!orc.getAgent(id),
+      agentNames: () => orc.getAllAgents().map((a) => a.name),
+      poke: () => orc.pokeDispatcher(),
+      backendId: DEMO_MODE ? DEMO_BACKEND_ID : "claude",
+    },
+    claudeHome: CLAUDE_HOME,
+    stateFile: path.join(config.instanceDir, "attachments.json"),
+    // Demo mode never runs `claude`: fork runs are the scripted fake agent
+    forkCommand: DEMO_MODE
+      ? { command: process.execPath, prefixArgs: [resolveDemoAgentScript(FAKE_AGENT_SCRIPT), "--scenario", path.join(CONFIG_DIR, "demo-scenario.json")] }
+      : undefined,
+  });
+  attachManager.restore();
+  attachManager.start();
+
   // Start process scanner to detect external CLI agents
   scanner = new ProcessScanner(
     () => orc.getManagedPids(),
@@ -1601,64 +1713,27 @@ async function main() {
       onAdded: (agents) => {
         for (const agent of agents) {
           const name = agent.command.charAt(0).toUpperCase() + agent.command.slice(1);
-          const displayName = `${name} (${agent.pid})`;
-          externalAgents.set(agent.agentId, {
+          addExternalAgent({
             agentId: agent.agentId,
-            name: displayName,
+            name: `${name} (${agent.pid})`,
             backendId: agent.backendId,
             pid: agent.pid,
             cwd: agent.cwd,
             startedAt: agent.startedAt,
             status: agent.status,
-          });
-          console.log(`[ProcessScanner] External agent found: ${displayName} (pid=${agent.pid}, cwd=${agent.cwd})`);
-          publishEvent({
-            type: "AGENT_CREATED",
-            agentId: agent.agentId,
-            name: displayName,
-            role: agent.cwd ? path.basename(agent.cwd) || agent.backendId : agent.backendId,
-            isExternal: true,
-            palette: agent.pid % 6,
-            pid: agent.pid,
-            cwd: agent.cwd ?? undefined,
-            startedAt: agent.startedAt,
-            backend: agent.backendId,
-          });
-          publishEvent({
-            type: "AGENT_STATUS",
-            agentId: agent.agentId,
-            status: agent.status,
-          });
-
-          // Attach output reader for this external agent
-          outputReader?.attach(agent.agentId, agent.pid, agent.cwd, agent.backendId, (chunk) => {
-            publishEvent({
-              type: "LOG_APPEND",
-              agentId: agent.agentId,
-              taskId: "external",
-              stream: "stdout",
-              chunk,
-            });
+            args: agent.args,
           });
         }
       },
       onRemoved: (agentIds) => {
-        for (const agentId of agentIds) {
-          const ext = externalAgents.get(agentId);
-          console.log(`[ProcessScanner] External agent gone: ${ext?.name ?? agentId}`);
-          outputReader?.detach(agentId);
-          externalAgents.delete(agentId);
-          publishEvent({
-            type: "AGENT_FIRED",
-            agentId,
-          });
-        }
+        for (const agentId of agentIds) removeExternalAgent(agentId);
       },
       onChanged: (agents) => {
         for (const agent of agents) {
           const ext = externalAgents.get(agent.agentId);
           // For Claude backend, JSONL reader drives status — skip CPU-based updates
           if (ext?.backendId === "claude") continue;
+          if (attachManager?.isAttached(agent.agentId)) continue;
           if (ext) {
             ext.status = agent.status;
           }
@@ -1671,6 +1746,18 @@ async function main() {
       },
     },
   );
+
+  // Demo mode: one simulated terminal session the owner can add to the team (no tokens)
+  if (DEMO_MODE && config.externalAgents) {
+    try {
+      const { session, external } = await startDemoExternalSession(CONFIG_DIR, Number(process.env.PIXEL_CREW_DEMO_DELAY_SCALE ?? 1));
+      demoSessionPid = session.pid;
+      console.log(`[Gateway] Demo mode: simulated Claude Code session ${external.agentId} in ${external.cwd}`);
+      addExternalAgent({ agentId: external.agentId, name: `Claude (${external.pid})`, backendId: "claude", pid: external.pid, cwd: external.cwd, startedAt: Date.now(), status: "idle", args: external.args });
+    } catch (err) {
+      console.warn(`[Gateway] Demo mode: could not start the simulated Claude session: ${(err as Error).message}`);
+    }
+  }
   // External CLI sessions are polled with `ps` only while the feature is on and someone can
   // see them (P4.4). Demo mode never adopts the user's real CLI sessions into a demo office.
   const updateScanner = () => {
@@ -1769,6 +1856,9 @@ function cleanup() {
   try { persistTeamState(); } catch { /* ignore */ }
   outputReader?.detachAll();
   scanner?.stop();
+  attachManager?.stop();
+  // SIGTERM lets the fake session remove its registry entry and socket
+  if (demoSessionPid) { try { process.kill(demoSessionPid, "SIGTERM"); } catch { /* already gone */ } }
   officeConfig.close();
   previewServer.shutdown();
   stopTunnel();
