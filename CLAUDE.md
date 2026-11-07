@@ -57,6 +57,13 @@ TASK_DONE includes structured result (changedFiles, diffStat, testResult).
 - Extra themes are data-only palette JSON in `apps/web/public/themes/` (`layout/themes.ts`).
 - Render budget: 0 renders when nobody works; working agents tick at ~7 fps (`TYPE_FRAME_DURATION_SEC`).
 
+## Performance (Phase 4)
+- Game loop (`engine/gameLoop.ts`): ticks only for timers or motion, 30 fps cap, paused when the tab is hidden or the canvas is off-screen; counters in `window.__pixelCrewLoop`.
+- Static layer (`engine/staticLayer.ts`): floor/walls/furniture cached offscreen; `window.__pixelCrewDebug.staticCache = false` + `redraw()` draws in full for comparisons.
+- Web code imports runtime values from `@pixel-crew/shared/client` (no Zod in the bundle; lint-enforced). Heavy UI (markdown, dialogs, editor) stays behind `next/dynamic`.
+- CI size gate: `pnpm --filter web size` vs `apps/web/perf-budget.json` (+5%). Source maps for analysis: `PIXEL_CREW_SOURCE_MAPS=1 pnpm --filter web build`.
+- Logs: LOG_APPEND batched ~100 ms (`apps/gateway/src/log-stream.ts`); clients send `SUBSCRIBE_LOGS` for open panes. Measurements: `docs/perf/`.
+
 ## Team Execution Flow
 Phases: CREATE → DESIGN → EXECUTE → COMPLETE → (loop or END).
 Execute: Leader → Dev (build+self-fix) → Reviewer (VERDICT) → Fix loop (max 3 reviews).

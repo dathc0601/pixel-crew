@@ -1,7 +1,7 @@
 # Fork Improvement Plan: from "Open Office" to a pixel-art AI mini company
 
 Date: 2026-11-07
-Status: owner decisions recorded (§0). Phase 0 merged (2026-11-07). Phase 1 (daemon and UI) implemented on branch `phase-1-boss-flow` (2026-11-07), with a token-free demo mode (`pnpm dev:demo`). Phase 3 (office layout, rooms, art) implemented on branch `phase-3-office-art` (2026-11-07). See the status lines under each item.
+Status: owner decisions recorded (§0). Phase 0 merged (2026-11-07). Phase 1 (daemon and UI) implemented on branch `phase-1-boss-flow` (2026-11-07), with a token-free demo mode (`pnpm dev:demo`). Phase 3 (office layout, rooms, art) implemented on branch `phase-3-office-art` (2026-11-07). Phase 4 (performance) implemented on branch `phase-4-performance` (2026-11-07); measurements in `docs/perf/baseline-2026-11-07.md`. See the status lines under each item.
 Scope: `~/WebstormProjects/OpenOffice`. `origin` is `github.com/dathc0601/pixel-crew` (renamed from OpenOffice on 2026-11-07); `upstream` is `github.com/longyangxi/OpenOffice` (formerly "bit-office", MIT).
 
 Legend used throughout:
@@ -461,6 +461,7 @@ Each task lists its goal, the files involved, the approach, acceptance criteria,
 ### Phase 4 — Performance and lightweight (about 1–2 weeks; measure first)
 
 **P4.1 True sleep in the game loop (M).**
+- **Status: DONE.** `engine/gameLoop.ts`: sleeps right after a frame when the next timer is far away (typing: 22 ticks / 22 renders per 3 s, was 44 / 22), 30 fps cap while walking (90 ticks per 3 s), full pause on `document.hidden` and off-screen canvas (IntersectionObserver); on resume no timer catches up, walks finish and working agents sit at their desks (`officeState.resumeAfterPause`), hand-offs while paused play instantly. Fake-clock tests in `engine/__tests__/gameLoop.test.ts`.
 - *Files:* `engine/gameLoop.ts`, `engine/officeState.ts:408-491`.
 - *Approach:*
   - Replace the "`needsTick` keeps rAF alive" approach with **next-deadline scheduling**: compute the earliest timer expiry (wander, seat, bubble) and `setTimeout` until then. Run rAF only while something is visually moving.
@@ -468,17 +469,18 @@ Each task lists its goal, the files involved, the approach, acceptance criteria,
   - Pause completely on `document.hidden` and when the canvas is off-screen (IntersectionObserver).
 - *Acceptance:* With agents idle and wandering, Chrome Performance shows no rAF callbacks between wander moves, and main-thread CPU stays under 1% on an M-series Mac.
 
-**P4.2 Static layer caching (S).** Pre-render the floor, walls and static furniture into an offscreen canvas that is invalidated only on layout or zoom change. Per frame, draw characters, bubbles and dynamic props only.
+**P4.2 Static layer caching (S).** **Status: DONE.** `engine/staticLayer.ts`: floor, walls, furniture and room names cached offscreen, keyed on layout, furniture state, theme colors, zoom, pan, canvas size and DPR; each frame blits it and redraws only the characters' areas. Pixel-identical to a full redraw at DPR 1/2/3 (fractional DPRs and the editor draw in full); render time about 0.6–1.0 ms vs 1.5–1.7 ms. Pre-render the floor, walls and static furniture into an offscreen canvas that is invalidated only on layout or zoom change. Per frame, draw characters, bubbles and dynamic props only.
 
 **P4.3 Bundle diet (M).**
+- **Status: DONE.** `/office` first load 242 → 158 kB: markdown and the confirm dialog load on first use, Zod is out of the client (`@pixel-crew/shared/client` + lint rule), Ably/JSZip/editor were already lazy. Fonts self-hosted and subset in `public/fonts` (OFL, `THIRD_PARTY_NOTICES.md`). CI size gate: `pnpm --filter web size` against `apps/web/perf-budget.json` (+5%). Left: sprite data and editor actions in the page chunk (~20 kB gzip).
 - Keep Zod out of the client hot path: validate in dev only, or use hand-written guards generated from the schemas.
 - Lazy-load react-markdown/remark-gfm, the editor, the theme loader (JSZip) and Ably.
 - Self-host the three fonts (subset Press Start 2P).
 - *Acceptance:* Meet the budgets in §9. Use `next build` output plus `source-map-explorer` in CI as a size gate.
 
-**P4.4 Daemon idle cost (S–M).** No polling while no external-agents feature is enabled. Add a `fs.watch` debounce. Log rotation in `file-logger.ts` (cap the size). Measure RSS with 0, 3 and 8 agents.
+**P4.4 Daemon idle cost (S–M).** **Status: DONE.** External-agent scanner only while a viewer is connected, never in demo mode, and switchable (`"externalAgents": false`, `PIXEL_CREW_EXTERNAL_AGENTS=0`); output reader debounces `fs.watch` bursts (100 ms) and polls every 10 s instead of 3 s when the watch works; `gateway.log` capped (`PIXEL_CREW_LOG_MAX_MB`, default 5) with two backups, startup rotation and 16 KB line cap. Demo daemon RSS 77.6 / 78.5 / 79.1 MB with 6 / 3 / 0 agents, CPU ≤ 0.03 %. No polling while no external-agents feature is enabled. Add a `fs.watch` debounce. Log rotation in `file-logger.ts` (cap the size). Measure RSS with 0, 3 and 8 agents.
 
-**P4.5 Event-stream efficiency (S).** Coalesce `LOG_APPEND` chunks server-side (for example 100 ms batches), and let clients subscribe only to logs for the agent pane that is open. Mobile spectators get status events only.
+**P4.5 Event-stream efficiency (S).** **Status: DONE.** `apps/gateway/src/log-stream.ts`: LOG_APPEND batched per agent/task/stream over 100 ms (other events flush first); `SUBSCRIBE_LOGS {agentIds, previews?}`: full logs only for open panes, one-line previews otherwise, none for phones (`previews: false`) and spectators; catch-up as one `replace: true` event when a pane opens mid-task. Older clients that never subscribe get everything as before. Coalesce `LOG_APPEND` chunks server-side (for example 100 ms batches), and let clients subscribe only to logs for the agent pane that is open. Mobile spectators get status events only.
 
 ### Phase 5 — Cross-platform builds and mobile remote (about 2–4 weeks)
 
@@ -632,14 +634,15 @@ Findings ordered by severity. Each one comes from reading code; none was exploit
 
 | Metric | Today | Target |
 |---|---|---|
-| Web `/office` first-load JS | 234 kB (Next report) [V] | ≤ 170 kB with Next, ≤ 120 kB if moved to Vite/Preact |
-| Shared framework JS | 105 kB [V] | unchanged with Next |
-| `out/` total | 5.6 MB [V] (themes 3.2 MB) | ≤ 2.5 MB core; themes downloaded on demand |
-| Idle render (agents idle) | rAF runs continuously while anyone wanders [I] | 0 rAF between events; next-deadline timers; < 1% main-thread CPU |
-| Active render | Display refresh rate (60–120 Hz) [I] | ≤ 30 FPS cap; 15 FPS on mobile / battery saver; 0 when hidden |
-| Daemon idle CPU (0 running agents) | `ps` every 7 s + `lsof` every 5 s per external agent [V] | < 0.5% avg; no polling when external discovery is off |
-| Daemon RSS (0 / 5 agents) | not measured [U] | ≤ 120 MB / ≤ 200 MB (excluding the agent CLIs themselves) |
-| WS traffic, idle | not measured [U] | ≤ 1 msg / 30 s (keepalive) |
+| Web `/office` first-load JS | 242 kB before Phase 4 → **158 kB** (Next report; 184 kB with the root layout's chunks) [V] | ≤ 170 kB with Next ✓, ≤ 120 kB if moved to Vite/Preact; CI gate at budget + 5% |
+| Shared framework JS | 106 kB [V] | unchanged with Next |
+| `out/` total | 2.7 MB [V] (2.5 MB + 160 KB self-hosted fonts; themes are data-only JSON) | ≤ 2.5 MB core; themes downloaded on demand |
+| Idle render (agents idle) | 0 renders / 0 ticks per 3 s [V] | 0 rAF between events ✓; next-deadline timers ✓; < 1% main-thread CPU |
+| Active render | typing 22 renders / 22 ticks per 3 s; walking 30 fps cap; 0 when hidden or off-screen [V] | ≤ 30 FPS cap ✓; 15 FPS on mobile / battery saver; 0 when hidden ✓ |
+| Frame render time | 0.6–1.0 ms with the static layer vs 1.5–1.7 ms full redraw (M-series, Chromium) [V] | — |
+| Daemon idle CPU (0 running agents) | 0.02–0.03 % in demo mode [V]; `ps` scanner only while a viewer is connected, off with `externalAgents: false` | < 0.5% avg ✓; no polling when external discovery is off ✓ |
+| Daemon RSS (0 / 3 / 6 agents, demo) | 79.1 / 78.5 / 77.6 MB [V] | ≤ 120 MB / ≤ 200 MB (excluding the agent CLIs themselves) ✓ |
+| WS traffic, idle | not measured [U]; logs only for open panes (P4.5) | ≤ 1 msg / 30 s (keepalive) |
 | Desktop installer | ≥ 57 MB of bundled Node alone [V] + Tauri (~10 MB) [U] | ≤ 20 MB with system Node; ≤ 80 MB with bundled runtime |
 | Time to interactive (local) | not measured | < 1.5 s on a 2020 laptop |
 
