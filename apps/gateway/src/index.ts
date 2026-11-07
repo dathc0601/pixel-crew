@@ -3,7 +3,9 @@ import "./root-guard.js";
 // Second: demo mode picks its own data dir before config.ts resolves paths
 import { DEMO_MODE, DEMO_BACKEND_ID, DEMO_TEAM, resolveDemoAgentScript, writeDemoScenario } from "./demo-mode.js";
 import { registerChannel, initTransports, publishEvent, destroyTransports, reinitChannel, isChannelActive } from "./transport.js";
-import { wsChannel, setPairCode, sendToClient, revokeAllSessions, connectedClientCount, onClientCountChange } from "./ws-server.js";
+import { wsChannel, setPairCode, sendToClient, revokeAllSessions, connectedClientCount, onClientCountChange, createPairLink, listDevices, ownerClientIds, revokeDevice, onDevicesChange } from "./ws-server.js";
+import { isCommandAllowed } from "./rbac.js";
+import { qrTerminal, ROLE_LABEL } from "./pairing.js";
 import { generatePairCode, isPathInside } from "./security.js";
 import { ablyChannel } from "./ably-client.js";
 import { telegramChannel, setTelegramAgentDefs, syncTelegramHiredAgents } from "./telegram-channel.js";
@@ -138,7 +140,19 @@ function showPairCode() {
   console.log("║     PAIR CODE: " + code + "         ║");
   console.log("╚══════════════════════════════════╝");
   console.log("");
-  console.log(`Open your phone → enter gateway address + code`);
+  console.log(`Open your phone → enter gateway address + code, or press 'q' + Enter for a QR code`);
+  console.log("");
+}
+
+/** Terminal QR pairing (P5.4): a one-time owner link, valid 2 minutes, single use. */
+function showPairQr() {
+  const link = createPairLink("owner");
+  console.log("");
+  console.log(qrTerminal(link.url));
+  console.log("");
+  console.log(`Scan with your phone (${ROLE_LABEL[link.role]}, works once, expires in 2 minutes):`);
+  console.log(`  ${link.url}`);
+  if (link.warning) console.log(`  Note: ${link.warning}`);
   console.log("");
 }
 
@@ -458,11 +472,7 @@ function mapOrchestratorEvent(e: OrchestratorEvent): GatewayEvent | null {
 // RBAC — role-based command permission
 // ---------------------------------------------------------------------------
 
-const ALLOWED: Record<UserRole, Set<string>> = {
-  owner: new Set(["*"]),
-  collaborator: new Set(["PING", "SUGGEST", "LIST_PROJECTS", "LOAD_PROJECT"]),
-  spectator: new Set(["PING", "LIST_PROJECTS", "LOAD_PROJECT"]),
-};
+// Table in rbac.ts (unit-tested); pairing, devices and settings commands are owner-only.
 
 // Per-agent custom working directories (set via CREATE_AGENT or CREATE_TEAM workDir)
 const agentWorkDirs = new Map<string, string>();
@@ -492,7 +502,7 @@ function handleCommand(parsed: Command, meta: CommandMeta) {
   }
 
   // RBAC enforcement
-  if (!ALLOWED[meta.role].has("*") && !ALLOWED[meta.role].has(parsed.type)) {
+  if (!isCommandAllowed(meta.role, parsed.type)) {
     console.log(`[RBAC] Blocked ${parsed.type} from ${meta.role} (client=${meta.clientId})`);
     return;
   }
@@ -1226,6 +1236,19 @@ function handleCommand(parsed: Command, meta: CommandMeta) {
       sendToClient(meta.clientId, { type: "SESSIONS_REVOKED", revoked });
       break;
     }
+    case "CREATE_PAIR_LINK": {
+      // Owner-only. The link carries a live secret: reply to the caller only, never broadcast.
+      sendToClient(meta.clientId, createPairLink(parsed.role, parsed.baseUrl));
+      break;
+    }
+    case "LIST_DEVICES": {
+      sendToClient(meta.clientId, { type: "DEVICES", devices: listDevices(meta.clientId) });
+      break;
+    }
+    case "REVOKE_DEVICE": {
+      revokeDevice(parsed.deviceId); // owners get the new list through onDevicesChange
+      break;
+    }
     case "TOGGLE_AUTO_MERGE": {
       console.log(`[Gateway] Toggle autoMerge for agent ${parsed.agentId}: ${parsed.autoMerge}`);
       orc.setAgentAutoMerge(parsed.agentId, parsed.autoMerge);
@@ -1690,8 +1713,21 @@ async function main() {
   // Start Cloudflare Tunnel if configured
   startTunnel();
 
+  // Phones can reach this gateway: print a QR pairing link right away (press 'q' for a new one)
+  if (config.listenHost !== "127.0.0.1" || config.publicUrl || config.tunnelBaseUrl) showPairQr();
+
   console.log("[Gateway] Listening for commands...");
-  console.log("[Gateway] Press 'p' + Enter to generate a new pair code, 'r' + Enter to revoke all sessions");
+  console.log("[Gateway] Press 'q' + Enter for a QR pairing link, 'p' + Enter for a new pair code, 'r' + Enter to revoke all sessions");
+
+  // Owners keep a live devices list (P5.4): refresh it whenever a device pairs, connects or is revoked
+  let devicesTimer: NodeJS.Timeout | null = null;
+  onDevicesChange(() => {
+    if (devicesTimer) return;
+    devicesTimer = setTimeout(() => {
+      devicesTimer = null;
+      for (const clientId of ownerClientIds()) sendToClient(clientId, { type: "DEVICES", devices: listDevices(clientId) });
+    }, 100);
+  });
 
   // Auto-open browser only in production mode (pnpm start, not dev), skip when embedded as sidecar
   if (process.env.NODE_ENV !== "development" && !process.env.NO_OPEN && existsSync(config.webDir)) {
@@ -1707,6 +1743,8 @@ async function main() {
       const cmd = data.trim().toLowerCase();
       if (cmd === "p") {
         showPairCode();
+      } else if (cmd === "q") {
+        showPairQr();
       } else if (cmd === "r") {
         const revoked = revokeAllSessions();
         showPairCode();

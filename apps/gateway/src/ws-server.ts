@@ -1,7 +1,7 @@
 import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { CommandSchema } from "@pixel-crew/shared";
-import type { GatewayEvent, Command, UserRole } from "@pixel-crew/shared";
+import type { GatewayEvent, Command, UserRole, DeviceInfo as WireDeviceInfo, PairLinkEvent } from "@pixel-crew/shared";
 import { config } from "./config.js";
 import { previewServer } from "@pixel-crew/orchestrator";
 import { networkInterfaces } from "os";
@@ -12,9 +12,13 @@ import { getLogTail, type Channel, type CommandMeta } from "./transport.js";
 import { logEventFor, previewOf, type LogSubscription } from "./log-stream.js";
 import { writePortLock } from "./runtime-state.js";
 import { nanoid } from "nanoid";
+import { pairBaseUrls, pairLinkUrl, pairWarning, qrModules } from "./pairing.js";
 import {
   RateLimiter,
   SessionTokenStore,
+  PairingTokenStore,
+  cleanDeviceName,
+  describeUserAgent,
   buildTrustedOrigins,
   checkQuickConnect,
   checkWebSocketOrigin,
@@ -27,7 +31,7 @@ import {
 
 let wss: WebSocketServer | null = null;
 let httpServer: Server | null = null;
-const clients = new Map<WebSocket, { role: UserRole; clientId: string; sessionToken: string; logs: LogSubscription | null }>();
+const clients = new Map<WebSocket, { role: UserRole; clientId: string; sessionToken: string; deviceId: string; logs: LogSubscription | null }>();
 let pairCode: string | null = null;
 let onCommand: ((cmd: Command, meta: CommandMeta) => void) | null = null;
 
@@ -43,6 +47,21 @@ function getSessionStore(): SessionTokenStore {
   return sessionStore;
 }
 
+// One-time QR pairing tokens (P5.4): in memory only, 2 minutes, single use
+const pairingTokens = new PairingTokenStore();
+
+const devicesListeners = new Set<() => void>();
+/** Called when a device pairs, is revoked, connects or disconnects (owners refresh their list). */
+export function onDevicesChange(cb: () => void): () => void {
+  devicesListeners.add(cb);
+  return () => devicesListeners.delete(cb);
+}
+function notifyDevices(): void {
+  for (const cb of devicesListeners) {
+    try { cb(); } catch (err) { console.error("[WS] devices listener failed:", err); }
+  }
+}
+
 // Brute-force protection for code/token validation: 5 attempts per minute per client, then 5 min lockout
 const authLimiter = new RateLimiter({ max: 5, windowMs: 60_000, lockoutMs: 5 * 60_000 });
 const MAX_BODY_BYTES = 16 * 1024;
@@ -54,7 +73,7 @@ const AUTH_TIMEOUT_MS = 5000;
 function trustedOrigins(): Set<string> {
   const devPorts = [3000, 3002];
   if (process.env.NEXT_DEV_PORT) devPorts.push(Number(process.env.NEXT_DEV_PORT));
-  return buildTrustedOrigins({ port: config.wsPort, isDev: config.isDev, devPorts, extra: config.allowedOrigins });
+  return buildTrustedOrigins({ port: config.wsPort, isDev: config.isDev, devPorts, extra: [...config.allowedOrigins, ...(config.publicUrl ? [config.publicUrl] : [])] });
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown, extraHeaders: Record<string, string> = {}) {
@@ -166,6 +185,7 @@ export function revokeAllSessions(opts: { exceptClientId?: string } = {}): numbe
   }
   const revoked = getSessionStore().revokeAll(keep);
   shareTokens.clear();
+  pairingTokens.clear();
   for (const [ws, info] of clients) {
     if (keep.includes(info.sessionToken)) continue;
     try { ws.send(JSON.stringify({ type: "AUTH_FAILED" })); } catch { /* closing anyway */ }
@@ -174,7 +194,62 @@ export function revokeAllSessions(opts: { exceptClientId?: string } = {}): numbe
   }
   console.log(`[Auth] Revoked ${revoked} session token(s)`);
   notifyClientCount();
+  notifyDevices();
   return revoked;
+}
+
+/**
+ * Make a one-time pairing link (`<base>/pair#<128-bit token>`, 2 minutes, single use)
+ * for a device with `role`, plus its QR code. `baseUrl` must be one of pairBaseUrls().
+ */
+export function createPairLink(role: UserRole, baseUrl?: string): PairLinkEvent {
+  const urls = pairBaseUrls({ port: config.wsPort, listenHost: config.listenHost, publicUrl: config.publicUrl, tunnelBaseUrl: config.tunnelBaseUrl });
+  const base = baseUrl && urls.includes(baseUrl) ? baseUrl : urls[0];
+  const { token, expiresAt } = pairingTokens.create(role);
+  const url = pairLinkUrl(base, token);
+  const warning = pairWarning(base);
+  return { type: "PAIR_LINK", url, role, expiresAt, qr: qrModules(url), urls, ...(warning ? { warning } : {}) };
+}
+
+/** Paired devices as seen by `clientId` (marks its own device and which ones are online). */
+export function listDevices(clientId?: string): WireDeviceInfo[] {
+  const online = new Set<string>();
+  let mine: string | undefined;
+  for (const [, info] of clients) {
+    online.add(info.deviceId);
+    if (info.clientId === clientId) mine = info.deviceId;
+  }
+  return getSessionStore().list().map((d) => ({
+    deviceId: d.deviceId,
+    name: d.name,
+    role: d.role,
+    kind: d.kind,
+    issuedAt: d.issuedAt,
+    lastSeenAt: d.lastSeenAt,
+    expiresAt: d.expiresAt,
+    connected: online.has(d.deviceId),
+    current: d.deviceId === mine,
+  }));
+}
+
+/** Client ids of connected owners (they get DEVICES updates). */
+export function ownerClientIds(): string[] {
+  return [...clients.values()].filter((c) => c.role === "owner").map((c) => c.clientId);
+}
+
+/** Revoke one device: its token stops working and its open sockets close. */
+export function revokeDevice(deviceId: string): boolean {
+  const ok = getSessionStore().revokeDevice(deviceId);
+  for (const [ws, info] of clients) {
+    if (info.deviceId !== deviceId) continue;
+    try { ws.send(JSON.stringify({ type: "AUTH_FAILED" })); } catch { /* closing anyway */ }
+    ws.close(4001, "Device revoked");
+    clients.delete(ws);
+  }
+  if (ok) console.log(`[Auth] Revoked device ${deviceId}`);
+  notifyClientCount();
+  notifyDevices();
+  return ok;
 }
 
 /** Address the HTTP server is bound to (tests, logging). */
@@ -217,7 +292,7 @@ export const wsChannel: Channel = {
             sendJson(res, verdict.status, { error: verdict.reason });
             return;
           }
-          const sessionToken = getSessionStore().issue("owner");
+          const sessionToken = getSessionStore().issue("owner", { kind: "local", name: `This computer · ${describeUserAgent(req.headers["user-agent"])}` });
           sendJson(res, 200, {
             machineId: config.machineId,
             gatewayId: config.gatewayId,
@@ -233,7 +308,8 @@ export const wsChannel: Channel = {
           const body = await readJsonBody(req);
           if (!body) { sendJson(res, 400, { error: "Bad request" }); return; }
           if (!pairCodeMatches(body.code)) { sendJson(res, 401, { error: "Invalid pair code" }); return; }
-          const sessionToken = getSessionStore().issue("owner");
+          const sessionToken = getSessionStore().issue("owner", { kind: "code", name: cleanDeviceName(body.deviceName) ?? describeUserAgent(req.headers["user-agent"]) });
+          notifyDevices();
           sendJson(res, 200, {
             machineId: config.machineId,
             wsUrl: `ws://localhost:${config.wsPort}`,
@@ -241,6 +317,34 @@ export const wsChannel: Channel = {
             role: "owner",
             sessionToken,
           });
+          return;
+        }
+
+        // QR / link pairing (P5.4): trade a one-time token for a device-bound session
+        if (req.method === "POST" && req.url === "/pair/exchange") {
+          if (!rateLimitOk(req, res, "pair-exchange")) return;
+          const body = await readJsonBody(req);
+          if (!body) { sendJson(res, 400, { error: "Bad request" }); return; }
+          const role = pairingTokens.consume(body.token);
+          if (!role) {
+            console.log(`[Auth] /pair/exchange refused (unknown, used or expired link) from ${clientKey(req)}`);
+            sendJson(res, 401, { error: "This pairing link is invalid, expired or already used. Make a new one." });
+            return;
+          }
+          const store = getSessionStore();
+          const name = cleanDeviceName(body.deviceName) ?? describeUserAgent(req.headers["user-agent"]);
+          const sessionToken = store.issue(role, { kind: "qr", name });
+          const device = store.lookup(sessionToken)!;
+          console.log(`[Auth] Paired "${name}" as ${role} via one-time link (device ${device.deviceId})`);
+          sendJson(res, 200, {
+            machineId: config.machineId,
+            gatewayId: config.gatewayId,
+            role,
+            sessionToken,
+            deviceId: device.deviceId,
+            expiresAt: device.expiresAt,
+          }, { "Cache-Control": "no-store" });
+          notifyDevices();
           return;
         }
 
@@ -264,7 +368,8 @@ export const wsChannel: Channel = {
           if (!body) { sendJson(res, 400, { error: "Bad request" }); return; }
           const share = typeof body.token === "string" ? shareTokens.get(body.token) : undefined;
           if (!share) { sendJson(res, 401, { error: "Invalid share token" }); return; }
-          const sessionToken = getSessionStore().issue(share.role);
+          const sessionToken = getSessionStore().issue(share.role, { kind: "share", name: cleanDeviceName(body.deviceName) ?? describeUserAgent(req.headers["user-agent"]) });
+          notifyDevices();
           sendJson(res, 200, {
             machineId: config.machineId,
             wsUrl: `ws://localhost:${config.wsPort}`,
@@ -422,14 +527,17 @@ export const wsChannel: Channel = {
                 if (pendingAuth.has(ws)) {
                   if (msg.type === "AUTH") {
                     if (msg.sessionToken) {
-                      const role = getSessionStore().validate(msg.sessionToken);
-                      if (role) {
+                      const store = getSessionStore();
+                      const device = store.lookup(msg.sessionToken);
+                      if (device) {
                         const clientId = nanoid(8);
-                        clients.set(ws, { role, clientId, sessionToken: msg.sessionToken, logs: null });
+                        clients.set(ws, { role: device.role, clientId, sessionToken: msg.sessionToken, deviceId: device.deviceId, logs: null });
                         pendingAuth.delete(ws);
                         clearTimeout(authTimer);
-                        console.log(`[WS] Client authenticated as ${role} (total: ${clients.size})`);
+                        store.touch(msg.sessionToken);
+                        console.log(`[WS] Client authenticated as ${device.role} (${device.name}; total: ${clients.size})`);
                         notifyClientCount();
+                        notifyDevices();
                         return;
                       }
                     }
@@ -478,7 +586,7 @@ export const wsChannel: Channel = {
               const wasClient = clients.delete(ws);
               clearTimeout(authTimer);
               console.log(`[WS] Client disconnected (total: ${clients.size})`);
-              if (wasClient) notifyClientCount();
+              if (wasClient) { notifyClientCount(); notifyDevices(); }
             });
           });
 

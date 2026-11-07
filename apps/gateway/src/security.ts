@@ -7,7 +7,7 @@
 import type { IncomingMessage } from "http";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "path";
-import { randomBytes, timingSafeEqual } from "crypto";
+import { createHash, randomBytes, timingSafeEqual } from "crypto";
 import type { UserRole } from "@pixel-crew/shared";
 
 // ---------------------------------------------------------------------------
@@ -116,6 +116,17 @@ export function isTunnelRequest(req: IncomingMessage): boolean {
 }
 
 /**
+ * Requests relayed by a local reverse proxy (Tailscale serve, Caddy, nginx, a tunnel).
+ * They arrive on loopback, but the person behind them is not on this machine, so they
+ * must never get the quick-connect owner token. The local UI sends none of these.
+ */
+export function isProxiedRequest(req: IncomingMessage): boolean {
+  const h = req.headers;
+  return isTunnelRequest(req) || !!(h["x-forwarded-for"] || h["x-forwarded-host"] || h["x-forwarded-proto"]
+    || h["forwarded"] || h["x-real-ip"] || h["tailscale-user-login"] || h["tailscale-headers-info"]);
+}
+
+/**
  * GET /connect hands out an owner token without a pair code, so it must only
  * answer the local UI: a loopback socket, a loopback Host header, and either no
  * Origin (same-origin GET, curl) or a trusted Origin.
@@ -123,6 +134,7 @@ export function isTunnelRequest(req: IncomingMessage): boolean {
 export function checkQuickConnect(req: IncomingMessage, ctx: QuickConnectContext): Verdict {
   if (ctx.ablyConfigured) return { ok: false, status: 403, reason: "Quick connect disabled (Ably configured)" };
   if (isTunnelRequest(req)) return { ok: false, status: 403, reason: "Quick connect is not available through the tunnel" };
+  if (isProxiedRequest(req)) return { ok: false, status: 403, reason: "Quick connect is not available through a proxy; pair with a QR code or the pair code" };
   if (!isLoopbackAddress(req.socket.remoteAddress)) {
     return { ok: false, status: 403, reason: "Quick connect is only available on this machine; pair with the pair code instead" };
   }
@@ -156,6 +168,10 @@ export function clientKey(req: IncomingMessage): string {
   const remote = req.socket.remoteAddress ?? "unknown";
   const cf = req.headers["cf-connecting-ip"];
   if (isLoopbackAddress(remote) && typeof cf === "string" && cf) return `cf:${cf}`;
+  // A local reverse proxy (Tailscale serve, Caddy…) appends the address it saw to X-Forwarded-For.
+  // Take the last entry: earlier ones come from the client and could be rotated to dodge the limit.
+  const xff = req.headers["x-forwarded-for"];
+  if (isLoopbackAddress(remote) && typeof xff === "string" && xff.trim()) return `xff:${xff.split(",").pop()!.trim()}`;
   return remote;
 }
 
@@ -244,24 +260,79 @@ export class RateLimiter {
 }
 
 // ---------------------------------------------------------------------------
-// Session tokens
+// Session tokens (device-bound, P5.4)
 // ---------------------------------------------------------------------------
+
+/** How a device got its session. "local" = /connect on this machine (renewed on every load). */
+export type DeviceKind = "local" | "qr" | "code" | "share";
 
 export interface SessionRecord {
   role: UserRole;
   issuedAt: number;
   expiresAt: number;
+  /** Stable id for listing and revoking this device (not a secret) */
+  deviceId: string;
+  /** Human label, e.g. "iPhone · Safari" */
+  name: string;
+  kind: DeviceKind;
+  lastSeenAt: number;
+}
+
+/** What the devices list shows (never the token or its hash). */
+export type DeviceInfo = Omit<SessionRecord, "issuedAt"> & { issuedAt: number };
+
+export interface IssueOptions {
+  name?: string;
+  kind?: DeviceKind;
 }
 
 export const DEFAULT_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/** Local quick-connect sessions kept per gateway; older ones are dropped (every page load makes one). */
+export const MAX_LOCAL_SESSIONS = 10;
+
+const ROLES = new Set<UserRole>(["owner", "collaborator", "spectator"]);
+const KINDS = new Set<DeviceKind>(["local", "qr", "code", "share"]);
+
+/** Tokens are stored as SHA-256 hashes, so the file on disk cannot be replayed. */
+export function hashToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+/** Short device label from a User-Agent ("iPhone · Safari", "Android · Chrome", "Mac · Firefox"). */
+export function describeUserAgent(ua: string | undefined): string {
+  if (!ua) return "Unknown device";
+  const os = /iPhone/.test(ua) ? "iPhone"
+    : /iPad/.test(ua) ? "iPad"
+    : /Android/.test(ua) ? "Android"
+    : /Windows/.test(ua) ? "Windows"
+    : /Mac OS X|Macintosh/.test(ua) ? "Mac"
+    : /Linux/.test(ua) ? "Linux"
+    : /curl|node|undici/i.test(ua) ? "Script"
+    : "Device";
+  const browser = /Edg\//.test(ua) ? "Edge"
+    : /Firefox\/|FxiOS/.test(ua) ? "Firefox"
+    : /Chrome\/|CriOS/.test(ua) ? "Chrome"
+    : /Safari\//.test(ua) ? "Safari"
+    : "";
+  return browser ? `${os} · ${browser}` : os;
+}
+
+/** Trim a client-supplied device name to printable text (≤ 60 chars). */
+export function cleanDeviceName(name: unknown): string | null {
+  if (typeof name !== "string") return null;
+  const n = name.replace(/[\u0000-\u001f\u007f<>]/g, "").trim().slice(0, 60);
+  return n || null;
+}
 
 /**
- * Session tokens with expiry, persisted to disk.
+ * Session tokens with expiry and one record per device, persisted to disk.
  *
- * Tokens in the pre-expiry format (token → role) are dropped on load: some may
- * have been issued by the old unauthenticated /connect to another page or host.
+ * File format v3 keys records by SHA-256(token). v2 files (raw tokens, no device
+ * info) are migrated in place; pre-expiry files (token → role) are dropped, since some
+ * may have been issued by the old unauthenticated /connect to another page or host.
  */
 export class SessionTokenStore {
+  /** hash(token) → record */
   private tokens = new Map<string, SessionRecord>();
   private now: () => number;
   readonly ttlMs: number;
@@ -275,14 +346,22 @@ export class SessionTokenStore {
     try {
       if (!existsSync(this.file)) return;
       const raw = JSON.parse(readFileSync(this.file, "utf-8"));
-      if (raw && raw.version === 2 && raw.tokens && typeof raw.tokens === "object") {
-        const t = this.now();
-        for (const [token, rec] of Object.entries(raw.tokens as Record<string, SessionRecord>)) {
-          if (rec && typeof rec.expiresAt === "number" && rec.expiresAt > t
-            && (rec.role === "owner" || rec.role === "collaborator" || rec.role === "spectator")) {
-            this.tokens.set(token, rec);
-          }
+      const t = this.now();
+      if (raw && (raw.version === 2 || raw.version === 3) && raw.tokens && typeof raw.tokens === "object") {
+        for (const [key, rec] of Object.entries(raw.tokens as Record<string, Partial<SessionRecord>>)) {
+          if (!rec || typeof rec.expiresAt !== "number" || rec.expiresAt <= t || !ROLES.has(rec.role as UserRole)) continue;
+          const hash = raw.version === 2 ? hashToken(key) : key;
+          this.tokens.set(hash, {
+            role: rec.role as UserRole,
+            issuedAt: typeof rec.issuedAt === "number" ? rec.issuedAt : t,
+            expiresAt: rec.expiresAt,
+            deviceId: typeof rec.deviceId === "string" ? rec.deviceId : randomBytes(6).toString("hex"),
+            name: typeof rec.name === "string" ? rec.name : "Paired device",
+            kind: KINDS.has(rec.kind as DeviceKind) ? (rec.kind as DeviceKind) : "code",
+            lastSeenAt: typeof rec.lastSeenAt === "number" ? rec.lastSeenAt : (rec.issuedAt ?? t),
+          });
         }
+        if (raw.version === 2) this.persist();
       } else {
         console.log("[Auth] Dropping session tokens in the legacy format; paired devices must pair again");
         this.persist();
@@ -294,39 +373,80 @@ export class SessionTokenStore {
     const dir = dirname(this.file);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     const tmp = `${this.file}.tmp`;
-    writeFileSync(tmp, JSON.stringify({ version: 2, tokens: Object.fromEntries(this.tokens) }), { encoding: "utf-8", mode: 0o600 });
+    writeFileSync(tmp, JSON.stringify({ version: 3, tokens: Object.fromEntries(this.tokens) }), { encoding: "utf-8", mode: 0o600 });
     renameSync(tmp, this.file);
   }
 
-  issue(role: UserRole): string {
+  issue(role: UserRole, opts: IssueOptions = {}): string {
     const token = randomBytes(24).toString("base64url");
     const t = this.now();
     this.pruneExpired(t);
-    this.tokens.set(token, { role, issuedAt: t, expiresAt: t + this.ttlMs });
+    const kind = opts.kind ?? "code";
+    this.tokens.set(hashToken(token), {
+      role,
+      issuedAt: t,
+      expiresAt: t + this.ttlMs,
+      deviceId: randomBytes(6).toString("hex"),
+      name: opts.name ?? (kind === "local" ? "This computer" : "Paired device"),
+      kind,
+      lastSeenAt: t,
+    });
+    if (kind === "local") this.capLocal();
     this.persist();
     return token;
   }
 
   /** Role for a valid, unexpired token; null otherwise. */
   validate(token: unknown): UserRole | null {
+    return this.lookup(token)?.role ?? null;
+  }
+
+  /** The device record for a valid, unexpired token (no secrets in it). */
+  lookup(token: unknown): DeviceInfo | null {
     if (typeof token !== "string" || !token) return null;
-    const rec = this.tokens.get(token);
+    const hash = hashToken(token);
+    const rec = this.tokens.get(hash);
     if (!rec) return null;
     if (rec.expiresAt <= this.now()) {
-      this.tokens.delete(token);
+      this.tokens.delete(hash);
       this.persist();
       return null;
     }
-    return rec.role;
+    return { ...rec };
   }
 
-  /** Revoke every token except the ones listed. Returns how many were revoked. */
+  /** Record that a device just authenticated (shown in the devices list). */
+  touch(token: string): void {
+    const rec = this.tokens.get(hashToken(token));
+    if (!rec) return;
+    rec.lastSeenAt = this.now();
+    this.persist();
+  }
+
+  /** Unexpired devices, newest first. */
+  list(): DeviceInfo[] {
+    this.pruneExpired(this.now());
+    return [...this.tokens.values()].map((r) => ({ ...r })).sort((a, b) => b.issuedAt - a.issuedAt);
+  }
+
+  /** Revoke one device. Returns true when it existed. */
+  revokeDevice(deviceId: string): boolean {
+    for (const [hash, rec] of this.tokens) {
+      if (rec.deviceId !== deviceId) continue;
+      this.tokens.delete(hash);
+      this.persist();
+      return true;
+    }
+    return false;
+  }
+
+  /** Revoke every token except the ones listed (raw tokens). Returns how many were revoked. */
   revokeAll(keep: Iterable<string> = []): number {
-    const keepSet = new Set(keep);
+    const keepSet = new Set([...keep].map(hashToken));
     let n = 0;
-    for (const token of [...this.tokens.keys()]) {
-      if (keepSet.has(token)) continue;
-      this.tokens.delete(token);
+    for (const hash of [...this.tokens.keys()]) {
+      if (keepSet.has(hash)) continue;
+      this.tokens.delete(hash);
       n++;
     }
     this.persist();
@@ -337,9 +457,73 @@ export class SessionTokenStore {
     return this.tokens.size;
   }
 
+  private capLocal() {
+    const local = [...this.tokens.entries()].filter(([, r]) => r.kind === "local").sort((a, b) => a[1].lastSeenAt - b[1].lastSeenAt);
+    for (let i = 0; i < local.length - MAX_LOCAL_SESSIONS; i++) this.tokens.delete(local[i][0]);
+  }
+
   private pruneExpired(t: number) {
-    for (const [token, rec] of this.tokens) {
-      if (rec.expiresAt <= t) this.tokens.delete(token);
+    for (const [hash, rec] of this.tokens) {
+      if (rec.expiresAt <= t) this.tokens.delete(hash);
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// One-time pairing tokens (QR codes, P5.4)
+// ---------------------------------------------------------------------------
+
+export const PAIR_TOKEN_TTL_MS = 2 * 60 * 1000;
+const MAX_PENDING_PAIR_TOKENS = 20;
+
+/**
+ * 128-bit, single-use, 2-minute tokens for `…/pair#<token>` links and QR codes.
+ * Kept in memory only (a restart invalidates them) and stored hashed. Consuming a
+ * token deletes it, so a replayed link fails like an unknown one.
+ */
+export class PairingTokenStore {
+  private pending = new Map<string, { role: UserRole; expiresAt: number }>();
+  private now: () => number;
+  readonly ttlMs: number;
+  constructor(opts: { ttlMs?: number; now?: () => number } = {}) {
+    this.ttlMs = opts.ttlMs ?? PAIR_TOKEN_TTL_MS;
+    this.now = opts.now ?? Date.now;
+  }
+
+  create(role: UserRole): { token: string; expiresAt: number } {
+    const t = this.now();
+    this.prune(t);
+    while (this.pending.size >= MAX_PENDING_PAIR_TOKENS) {
+      const oldest = this.pending.keys().next().value as string;
+      this.pending.delete(oldest);
+    }
+    const token = randomBytes(16).toString("base64url");
+    const expiresAt = t + this.ttlMs;
+    this.pending.set(hashToken(token), { role, expiresAt });
+    return { token, expiresAt };
+  }
+
+  /** The token's role if it is valid; the token is used up either way. */
+  consume(token: unknown): UserRole | null {
+    if (typeof token !== "string" || !/^[A-Za-z0-9_-]{22}$/.test(token)) return null;
+    const hash = hashToken(token);
+    const entry = this.pending.get(hash);
+    if (!entry) return null;
+    this.pending.delete(hash);
+    return entry.expiresAt > this.now() ? entry.role : null;
+  }
+
+  /** Invalidate every outstanding link (revoke all devices). */
+  clear(): void {
+    this.pending.clear();
+  }
+
+  get size(): number {
+    this.prune(this.now());
+    return this.pending.size;
+  }
+
+  private prune(t: number) {
+    for (const [hash, e] of this.pending) if (e.expiresAt <= t) this.pending.delete(hash);
   }
 }

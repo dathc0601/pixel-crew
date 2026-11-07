@@ -50,6 +50,8 @@ interface SavedConfig {
   sessionTtlMs?: number;
   /** Port for the separate preview origin (default: OS-assigned) */
   previewPort?: number;
+  /** HTTPS address phones use to reach this gateway, e.g. a Tailscale serve URL (QR pairing links, trusted origin) */
+  publicUrl?: string;
 }
 
 function ensureConfigDir() {
@@ -166,6 +168,19 @@ function resolveInstanceDir(gatewayId: string): string {
   return dir;
 }
 
+/** "https://host[:port]" without a trailing slash, or undefined for empty/invalid values. */
+function normalizePublicUrl(raw: unknown): string | undefined {
+  if (typeof raw !== "string" || !raw.trim()) return undefined;
+  try {
+    const u = new URL(raw.trim());
+    if (u.protocol !== "https:" && u.protocol !== "http:") return undefined;
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    console.warn(`[Config] Ignoring invalid publicUrl "${raw}"`);
+    return undefined;
+  }
+}
+
 function buildConfig() {
   ensureConfigDir();
   const saved = loadSavedConfig();
@@ -191,6 +206,8 @@ function buildConfig() {
     listenHost: (process.argv.includes("--lan") || process.env.PIXEL_CREW_LAN === "1" || saved.lan === true)
       ? "0.0.0.0"
       : "127.0.0.1",
+    /** Where phones reach this gateway (Tailscale serve / reverse proxy); used for QR links and trusted as an origin */
+    publicUrl: normalizePublicUrl(process.env.PIXEL_CREW_PUBLIC_URL || saved.publicUrl),
     allowedOrigins: Array.isArray(saved.allowedOrigins) ? saved.allowedOrigins.filter((o): o is string => typeof o === "string") : [],
     sessionTtlMs: typeof saved.sessionTtlMs === "number" && saved.sessionTtlMs > 0 ? saved.sessionTtlMs : 7 * 24 * 60 * 60 * 1000,
     isDev,

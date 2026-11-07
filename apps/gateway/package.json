@@ -25,6 +25,7 @@
     "dotenv": "^16.4.0",
     "nanoid": "^5.0.0",
     "node-telegram-bot-api": "^0.67.0",
+    "qrcode-generator": "^1.4.4",
     "ws": "^8.18.0"
   },
   "devDependencies": {

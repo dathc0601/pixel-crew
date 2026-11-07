@@ -127,7 +127,7 @@ describe("SessionTokenStore", () => {
     writeFileSync(file, JSON.stringify({ oldtoken: "owner" }));
     const store = new SessionTokenStore(file);
     assert.equal(store.validate("oldtoken"), null);
-    assert.equal(JSON.parse(readFileSync(file, "utf-8")).version, 2);
+    assert.equal(JSON.parse(readFileSync(file, "utf-8")).version, 3);
   });
   it("revokes all tokens except the kept ones", () => {
     const store = new SessionTokenStore(join(dir, "d.json"));
