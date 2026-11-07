@@ -31,6 +31,9 @@ const SOURCE_EXTS = new Set([
  * - Claude: watches JSONL session transcripts in ~/.claude/projects/
  * - Others: runs lsof periodically to detect file activity
  */
+/** fs.watch callbacks within this window are coalesced into one read */
+export const WATCH_DEBOUNCE_MS = 100;
+
 export class ExternalOutputReader {
   private readers = new Map<string, ReaderState>();
   private onStatus: StatusCallback | null = null;
@@ -107,7 +110,17 @@ export class ExternalOutputReader {
     let retryCount = 0;
 
     const THROTTLE_MS = 500;
-    const POLL_MS = 3000; // Fallback poll interval (fs.watch can be unreliable on macOS)
+    const POLL_MS = 3000; // Poll interval when fs.watch is unavailable
+    const SAFETY_POLL_MS = 10_000; // Safety-net poll next to a working fs.watch (macOS can miss events)
+    let readDebounce: ReturnType<typeof setTimeout> | null = null;
+    /** A burst of change events (one per JSONL append) reads the file once (P4.4) */
+    const readSoon = () => {
+      if (readDebounce) return;
+      readDebounce = setTimeout(() => {
+        readDebounce = null;
+        readNewLines();
+      }, WATCH_DEBOUNCE_MS);
+    };
     const MAX_RETRIES = 5;
 
     const emitThrottled = (text: string) => {
@@ -219,14 +232,14 @@ export class ExternalOutputReader {
                 } catch { /* stat failed */ }
               }
             }
-            readNewLines();
+            readSoon();
           });
         } catch {
           console.log(`[OutputReader] fs.watch failed, relying on polling only`);
         }
 
-        // Also poll periodically — macOS fs.watch is unreliable
-        pollTimer = setInterval(readNewLines, POLL_MS);
+        // Also poll periodically: macOS fs.watch can miss events
+        pollTimer = setInterval(readNewLines, watcher ? SAFETY_POLL_MS : POLL_MS);
       } catch (err) {
         console.error(`[OutputReader] Error setting up watcher for ${agentId}:`, err);
       }
@@ -236,6 +249,7 @@ export class ExternalOutputReader {
 
     return () => {
       stopped = true;
+      if (readDebounce) clearTimeout(readDebounce);
       if (watcher) {
         watcher.close();
         watcher = null;

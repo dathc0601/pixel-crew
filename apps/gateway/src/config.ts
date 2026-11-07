@@ -42,6 +42,8 @@ interface SavedConfig {
   tunnelToken?: string;
   /** Listen on all interfaces so phones on the LAN can pair (default: loopback only) */
   lan?: boolean;
+  /** Show CLI sessions started outside Pixel Crew (polls `ps`; default true). PIXEL_CREW_EXTERNAL_AGENTS=0 turns it off */
+  externalAgents?: boolean;
   /** Extra origins allowed to call the gateway cross-origin (CORS / WebSocket) */
   allowedOrigins?: string[];
   /** Session token lifetime in ms (default 7 days) */
@@ -183,6 +185,9 @@ function buildConfig() {
     })(),
     wsPort: Number(process.env.WS_PORT) || (isDev ? 9099 : 9090),
     /** Loopback by default; LAN only with --lan, PIXEL_CREW_LAN=1 or "lan": true in config.json */
+    externalAgents: process.env.PIXEL_CREW_EXTERNAL_AGENTS === "0" ? false
+      : process.env.PIXEL_CREW_EXTERNAL_AGENTS === "1" ? true
+      : saved.externalAgents !== false,
     listenHost: (process.argv.includes("--lan") || process.env.PIXEL_CREW_LAN === "1" || saved.lan === true)
       ? "0.0.0.0"
       : "127.0.0.1",

@@ -123,6 +123,25 @@ export function setPairCode(code: string) {
 }
 
 /** Send an event to a specific client by clientId (unicast) */
+const clientCountListeners = new Set<(count: number) => void>();
+
+/** Authenticated WebSocket clients right now. */
+export function connectedClientCount(): number {
+  return clients.size;
+}
+
+/** Called whenever a client authenticates or disconnects. Returns an unsubscribe function. */
+export function onClientCountChange(cb: (count: number) => void): () => void {
+  clientCountListeners.add(cb);
+  return () => clientCountListeners.delete(cb);
+}
+
+function notifyClientCount(): void {
+  for (const cb of clientCountListeners) {
+    try { cb(clients.size); } catch (err) { console.error("[WS] client count listener failed:", err); }
+  }
+}
+
 export function sendToClient(clientId: string, event: GatewayEvent) {
   const data = JSON.stringify(event);
   for (const [ws, info] of clients) {
@@ -152,6 +171,7 @@ export function revokeAllSessions(opts: { exceptClientId?: string } = {}): numbe
     clients.delete(ws);
   }
   console.log(`[Auth] Revoked ${revoked} session token(s)`);
+  notifyClientCount();
   return revoked;
 }
 
@@ -407,6 +427,7 @@ export const wsChannel: Channel = {
                         pendingAuth.delete(ws);
                         clearTimeout(authTimer);
                         console.log(`[WS] Client authenticated as ${role} (total: ${clients.size})`);
+                        notifyClientCount();
                         return;
                       }
                     }
@@ -439,9 +460,10 @@ export const wsChannel: Channel = {
 
             ws.on("close", () => {
               pendingAuth.delete(ws);
-              clients.delete(ws);
+              const wasClient = clients.delete(ws);
               clearTimeout(authTimer);
               console.log(`[WS] Client disconnected (total: ${clients.size})`);
+              if (wasClient) notifyClientCount();
             });
           });
 

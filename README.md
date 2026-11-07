@@ -143,6 +143,14 @@ pixel-crew/
 - The daemon refuses to run as root unless started with `--allow-root`.
 - Previews are served from a separate port and sandboxed, so preview code cannot read the control UI's storage.
 
+## Lightweight by default
+
+- The office canvas draws nothing while nobody works, about 7 frames per second while agents type, at most 30 while someone walks, and stops completely when the tab is hidden or the office is scrolled away.
+- External CLI sessions (agents you started yourself in a terminal) are found by polling `ps` every 7 s, only while a browser is connected. Turn it off with `"externalAgents": false` in the config file or `PIXEL_CREW_EXTERNAL_AGENTS=0`.
+- `gateway.log` is capped at 5 MB with two rotated copies (`PIXEL_CREW_LOG_MAX_MB` changes the cap).
+- Fonts are self-hosted: the UI makes no third-party request.
+- Measurements: [`docs/perf/baseline-2026-11-07.md`](docs/perf/baseline-2026-11-07.md).
+
 ## Contributing
 
 Issues and PRs are welcome. If you're exploring AI-native dev tooling, workflows, or interfaces, Pixel Crew is a great playground for experiments.

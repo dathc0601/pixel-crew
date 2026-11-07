@@ -3,7 +3,7 @@ import "./root-guard.js";
 // Second: demo mode picks its own data dir before config.ts resolves paths
 import { DEMO_MODE, DEMO_BACKEND_ID, DEMO_TEAM, resolveDemoAgentScript, writeDemoScenario } from "./demo-mode.js";
 import { registerChannel, initTransports, publishEvent, destroyTransports, reinitChannel, isChannelActive } from "./transport.js";
-import { wsChannel, setPairCode, sendToClient, revokeAllSessions } from "./ws-server.js";
+import { wsChannel, setPairCode, sendToClient, revokeAllSessions, connectedClientCount, onClientCountChange } from "./ws-server.js";
 import { generatePairCode } from "./security.js";
 import { ablyChannel } from "./ably-client.js";
 import { telegramChannel, setTelegramAgentDefs, syncTelegramHiredAgents } from "./telegram-channel.js";
@@ -23,7 +23,7 @@ import { exec, execFile, execFileSync, execSync } from "child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, renameSync, unlinkSync, rmdirSync } from "fs";
 import path from "path";
 import os from "os";
-import { ProcessScanner } from "./process-scanner.js";
+import { ProcessScanner, shouldScanExternalAgents } from "./process-scanner.js";
 import { ExternalOutputReader } from "./external-output-reader.js";
 import { installFileLogger } from "./file-logger.js";
 import { startTunnel, stopTunnel, isTunnelRunning } from "./tunnel.js";
@@ -1643,8 +1643,19 @@ async function main() {
       },
     },
   );
-  // Demo mode: do not adopt the user's real CLI sessions into a demo office
-  if (!DEMO_MODE) scanner.start();
+  // External CLI sessions are polled with `ps` only while the feature is on and someone can
+  // see them (P4.4). Demo mode never adopts the user's real CLI sessions into a demo office.
+  const updateScanner = () => {
+    const active = shouldScanExternalAgents({
+      enabled: config.externalAgents,
+      demo: DEMO_MODE,
+      wsViewers: connectedClientCount(),
+      ablyActive: isChannelActive(ablyChannel),
+    });
+    if (active !== scanner?.active) console.log(`[ProcessScanner] ${active ? "Scanning for external agents" : "Paused (no viewer, or externalAgents off)"}`);
+    scanner?.setActive(active);
+  };
+  onClientCountChange(updateScanner);
 
   const backendNames = config.detectedBackends.map((id) => getBackend(id)?.name ?? id).join(", ");
   console.log(`[Gateway] AI backends: ${backendNames || "none detected"} (default: ${getBackend(config.defaultBackend)?.name ?? config.defaultBackend})`);
@@ -1669,6 +1680,7 @@ async function main() {
 
   // Start transports (WS + optional Ably)
   await initTransports(handleCommand);
+  updateScanner(); // now that we know whether Ably is active
 
   // Start Cloudflare Tunnel if configured
   startTunnel();

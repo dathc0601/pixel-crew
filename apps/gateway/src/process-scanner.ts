@@ -118,6 +118,7 @@ export class ProcessScanner {
   }
 
   start(intervalMs = 7000) {
+    if (this.timer) return;
     this.scan(); // initial scan
     this.timer = setInterval(() => this.scan(), intervalMs);
   }
@@ -129,7 +130,17 @@ export class ProcessScanner {
     }
   }
 
-  private async scan() {
+  /** Scan only while someone could see the result (P4.4); resuming scans right away. */
+  setActive(active: boolean, intervalMs = 7000) {
+    if (active) this.start(intervalMs);
+    else this.stop();
+  }
+
+  get active(): boolean {
+    return this.timer !== null;
+  }
+
+  protected async scan() {
     try {
       const psOutput = await exec("ps", ["-eo", "pid,ppid,pcpu,etime,args"]);
       const managed = new Set(this.getManagedPids());
@@ -244,4 +255,13 @@ export class ProcessScanner {
 
     return null;
   }
+}
+
+/**
+ * Whether the external-agent scanner should poll (`ps` every 7 s) right now (plan P4.4):
+ * only when the feature is on, never in demo mode, and only while a viewer is connected.
+ * Ably viewers cannot be counted, so an active Ably channel counts as a viewer.
+ */
+export function shouldScanExternalAgents(s: { enabled: boolean; demo: boolean; wsViewers: number; ablyActive: boolean }): boolean {
+  return s.enabled && !s.demo && (s.wsViewers > 0 || s.ablyActive);
 }
