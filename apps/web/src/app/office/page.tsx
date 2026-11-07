@@ -39,6 +39,7 @@ const SettingsModal = dynamic(() => import("@/components/office/ui/SettingsModal
 const BottomToolbar = dynamic(() => import("@/components/office/ui/BottomToolbar"), { ssr: false });
 const ProjectHistory = dynamic(() => import("@/components/office/ui/ProjectHistory"), { ssr: false });
 const OfficeSwitcher = dynamic(() => import("@/components/office/ui/OfficeSwitcher"), { ssr: false });
+const BossFlowLayer = dynamic(() => import("@/components/office/ui/BossFlowLayer"), { ssr: false });
 const SpriteAvatar = dynamic(() => import("@/components/office/ui/SpriteAvatar"), { ssr: false });
 const LoadingOverlay = dynamic(() => import("@/components/office/ui/LoadingOverlay"), { ssr: false });
 const PreviewOverlay = dynamic(() => import("@/components/office/ui/PreviewOverlay"), { ssr: false });
@@ -1244,6 +1245,7 @@ export default function OfficePage() {
   return (
     <div style={{ height: "100vh", width: "100vw", position: "relative", overflow: "hidden", display: "flex", backgroundColor: TERM_BG }}>
       <AblyLoader />
+      <BossFlowLayer adapter={sceneAdapter} isOwner={isOwner} />
       {/* Game Scene — fills remaining space after sidebar, centered */}
       {sceneVisible && !consoleMode && <div style={{ flex: 1, position: "relative", minWidth: 0, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", marginRight: "calc(min(40vw, 800px) + 30px)" }}>
         {/* Loading overlay — fades out to reveal scene */}

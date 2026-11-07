@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { AgentStatus, GatewayEvent, TaskResultPayload, AgentDefinition, UserRole } from "@pixel-crew/shared";
 import { tunnelRewrite } from "@/components/office/ui/office-utils";
 import { sendCommand } from "@/lib/connection";
+import { handleBossFlowEvent } from "./boss-flow-store";
 
 /** Pending PICK_FOLDER callbacks: requestId → callback */
 export const folderPickCallbacks = new Map<string, (path: string) => void>();
@@ -596,6 +597,8 @@ export const useOfficeStore = create<OfficeStore>((set, get) => ({
   },
 
   handleEvent: (event) => {
+    // Boss flow (work items, hand-offs, office config) lives in boss-flow-store.ts
+    if (handleBossFlowEvent(event)) return;
     set((state) => {
       const agents = new Map(state.agents);
 
