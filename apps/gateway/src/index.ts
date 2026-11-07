@@ -13,6 +13,7 @@ import { createOrchestrator, getMergeHistory, previewServer, recordProjectRating
 import type { Command, GatewayEvent, UserRole, WorkItem as WireWorkItem } from "@pixel-crew/shared";
 import type { WorkItem } from "@pixel-crew/orchestrator";
 import { broadcastOfficeConfigChanges, handleOfficeConfigCommand, isOfficeConfigCommand } from "./office-config-commands.js";
+import { endProject } from "./project-commands.js";
 import type { CommandMeta } from "./transport.js";
 import { DEFAULT_AGENT_DEFS, type AgentDefinition } from "@pixel-crew/shared";
 import { nanoid } from "nanoid";
@@ -96,6 +97,7 @@ function toWireWorkItem(item: WorkItem): WireWorkItem {
     updatedAt: item.updatedAt,
     heartbeatAt: item.heartbeatAt,
     ...(item.selfWork ? { selfWork: true } : {}),
+    ...(item.held ? { held: true } : {}),
     ...(item.flags ? { flags: item.flags } : {}),
     ...(item.error ? { error: item.error } : {}),
   };
@@ -753,6 +755,20 @@ function handleCommand(parsed: Command, meta: CommandMeta) {
       persistTeamState();
       break;
     }
+    case "RESUME_POOL": {
+      const resumed = orc.resumePool();
+      console.log(`[Gateway] RESUME_POOL: resumed ${resumed} held work item(s)`);
+      persistTeamState();
+      break;
+    }
+    case "CANCEL_WORK_ITEM": {
+      const result = orc.cancelWorkItem(parsed.workItemId);
+      if (!result.ok) {
+        publishEvent({ type: "TEAM_CHAT", fromAgentId: "boss", message: result.error, messageType: "warning", timestamp: Date.now() });
+      }
+      persistTeamState();
+      break;
+    }
     case "STOP_TEAM": {
       console.log("[Gateway] Stopping team work");
       orc.stopTeam();
@@ -820,40 +836,14 @@ function handleCommand(parsed: Command, meta: CommandMeta) {
       break;
     }
     case "END_PROJECT": {
-      const agentId = parsed.agentId;
-      console.log(`[Gateway] END_PROJECT: agent=${agentId}`);
-
-      // Project was already archived when phase hit "complete".
-      // If somehow it wasn't (e.g. solo agent, no phase machine), archive now as fallback.
-      archiveProject(buildArchiveAgents(), buildArchiveTeam());
-      resetProjectBuffer();
-
-      orc.clearLeaderHistory(agentId);
-
-      // Auto-create agent if not in orchestrator (e.g. after gateway restart)
-      if (!orc.getAgent(agentId) && parsed.name) {
-        const backendId = parsed.backend ?? config.defaultBackend;
-        console.log(`[Gateway] END_PROJECT: auto-creating agent ${agentId}`);
-        orc.createAgent({
-          agentId,
-          name: parsed.name,
-          role: parsed.role ?? "",
-          personality: parsed.personality,
-          backend: backendId,
-        });
-      }
-
-      // Find teamId from orchestrator, or recover
-      let foundTeamId = orc.getAllTeamPhases().find(tp => tp.leadAgentId === agentId)?.teamId;
-      if (!foundTeamId) {
-        const agentInfo = orc.getAllAgents().find(a => a.agentId === agentId);
-        foundTeamId = agentInfo?.teamId ?? `team-${agentId}`;
-      }
-      // Ensure agent is recognized as team lead, then reset to create phase
-      orc.setTeamLead(agentId);
-      orc.setTeamPhase(foundTeamId, "create", agentId);
-      const greetTaskId = nanoid();
-      orc.runTask(agentId, greetTaskId, "Greet the user and ask what they would like to build next.", { phaseOverride: "create" });
+      console.log(`[Gateway] END_PROJECT: agent=${parsed.agentId}`);
+      endProject(orc, parsed, {
+        defaultBackend: config.defaultBackend,
+        archive: () => {
+          archiveProject(buildArchiveAgents(), buildArchiveTeam());
+          resetProjectBuffer();
+        },
+      });
       break;
     }
     case "PING": {
@@ -1451,10 +1441,11 @@ async function main() {
     }
   }
 
-  // Resume the work pool (running items are queued again)
+  // Restore the work pool: running items are queued again, and everything stays held until RESUME_POOL
   if (savedState.workItems?.length) {
     console.log(`[Gateway] Restoring ${savedState.workItems.length} work item(s)`);
-    orc.restoreWorkItems(savedState.workItems);
+    const held = orc.restoreWorkItems(savedState.workItems);
+    if (held > 0) console.log(`[Gateway] ${held} work item(s) are held: nothing starts until the owner sends RESUME_POOL`);
   }
 
   // Re-apply global autoMerge setting to all agents (overrides stale per-agent values
