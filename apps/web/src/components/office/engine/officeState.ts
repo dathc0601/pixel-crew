@@ -1,6 +1,7 @@
 import { TILE_SIZE, MATRIX_EFFECT_DURATION, CharacterState, Direction } from '../types'
 import type { Character, Seat, FurnitureInstance, TileType as TileTypeVal, OfficeLayout, PlacedFurniture } from '../types'
 import { createCharacter, updateCharacter } from './characters'
+import { Choreographer, type HandoffRequest } from './choreography'
 import { matrixEffectSeeds } from './matrixEffect'
 import { isWalkable, getWalkableTiles, findPath } from '../layout/tileMap'
 import {
@@ -26,6 +27,7 @@ import {
   CHARACTER_HIT_HEIGHT,
   SPEECH_BUBBLE_DURATION_SEC,
   SPEECH_BUBBLE_MAX_CHARS,
+  TYPE_FRAME_DURATION_SEC,
   DEFAULT_COLS,
   DEFAULT_ROWS,
 } from '../constants'
@@ -36,6 +38,12 @@ import type { AgentStatus } from '@pixel-crew/shared'
  * engine (numeric Character.id). Manages the office layout, characters,
  * seat assignments, and matrix effects.
  */
+/** Clickable scene objects that are not agents */
+export type SceneObjectId = 'boss' | 'task-board'
+
+/** Resting time for characters snapped to their seats after a reconnect */
+const SEAT_REST_ON_SNAP_SEC = 60
+
 export class OfficeState {
   layout: OfficeLayout
   backgroundImage: HTMLImageElement | null = null
@@ -51,8 +59,11 @@ export class OfficeState {
   characterScale = 1
   /** Dirty flag — set to true when scene changes and needs re-render */
   dirty = true
-  /** Keep the game loop alive (timers ticking) without forcing a render */
-  needsTick = false
+  /**
+   * Seconds until a timer needs the next update (0 = every frame, null = nothing pending).
+   * The game loop sleeps in between instead of polling with rAF.
+   */
+  nextWakeSec: number | null = null
   /** Optional callback to wake the game loop from sleep */
   onDirty: (() => void) | null = null
 
@@ -65,6 +76,18 @@ export class OfficeState {
     this.dirty = true
     this.onDirty?.()
   }
+
+  // ── Boss flow (P1.4–P1.6) ──────────────────────────────────────
+  /** Hand-off walks; busy characters skip the normal state machine */
+  readonly choreo: Choreographer
+  /** Queue board next to the Lead (P1.6), or null when nothing waits */
+  taskBoard: { charId: number; count: number } | null = null
+  /** Mini "subagent" sprite next to a Lead: charId → seconds left */
+  subagentCues = new Map<number, number>()
+  /** Clicks on the Boss or the task board (set by the scene adapter) */
+  onObjectClick: ((id: SceneObjectId) => void) | null = null
+  /** Last task-board hit box in world px (set by the renderer) */
+  taskBoardRect: { x: number; y: number; w: number; h: number } | null = null
 
   // ── Agent ID mapping ──────────────────────────────────────────
   private agentIdToCharId = new Map<string, number>()
@@ -79,6 +102,19 @@ export class OfficeState {
     this.furniture = layoutToFurnitureInstances(this.layout.furniture)
     this.walkableTiles = getWalkableTiles(this.tileMap, this.blockedTiles)
     this.characterScale = this.computeCharacterScale()
+    // Getters, so the choreographer always sees the current layout after setLayout()
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const office = this
+    this.choreo = new Choreographer({
+      get tileMap() { return office.tileMap },
+      get blockedTiles() { return office.blockedTiles },
+      get seats() { return office.seats },
+      get characterScale() { return office.characterScale },
+      getChar: (id) => this.characters.get(id),
+      say: (ch, text) => this.say(ch, text),
+      withOwnSeatUnblocked: (ch, fn) => this.withOwnSeatUnblocked(ch, fn),
+      now: () => (typeof performance !== 'undefined' ? performance.now() : Date.now()),
+    })
   }
 
   private computeCharacterScale(): number {
@@ -96,6 +132,7 @@ export class OfficeState {
 
   /** Hot-replace layout: rebuild tileMap, seats, furniture, reassign characters */
   setLayout(layout: OfficeLayout): void {
+    this.choreo.finishAll()
     this.layout = layout
     this.tileMap = layoutToTileMap(layout)
     this.characterScale = this.computeCharacterScale()
@@ -106,6 +143,11 @@ export class OfficeState {
 
     // Reassign characters to seats and relocate to valid positions
     for (const ch of this.characters.values()) {
+      if (ch.isBoss) {
+        ch.seatId = null
+        this.placeBoss(ch)
+        continue
+      }
       if (ch.seatId) {
         const seat = this.seats.get(ch.seatId)
         if (seat) {
@@ -188,6 +230,9 @@ export class OfficeState {
 
     const ch = this.characters.get(charId)
     if (!ch) return
+    this.choreo.forget(charId)
+    this.subagentCues.delete(charId)
+    if (this.taskBoard?.charId === charId) this.taskBoard = null
     if (ch.matrixEffect === 'despawn') return // already despawning
 
     // Free seat
@@ -319,6 +364,10 @@ export class OfficeState {
     if (charId === undefined) return
     const ch = this.characters.get(charId)
     if (!ch) return
+    this.say(ch, text)
+  }
+
+  private say(ch: Character, text: string): void {
     const truncated = text.length > SPEECH_BUBBLE_MAX_CHARS
       ? text.slice(0, SPEECH_BUBBLE_MAX_CHARS) + '...'
       : text
@@ -406,7 +455,10 @@ export class OfficeState {
   // ── Update loop ───────────────────────────────────────────────
 
   update(dt: number): void {
-    this.needsTick = false
+    let wake: number | null = null
+    const wakeIn = (sec: number) => {
+      if (Number.isFinite(sec) && sec >= 0 && (wake === null || sec < wake)) wake = sec
+    }
     const toDelete: number[] = []
     for (const ch of this.characters.values()) {
       // Snapshot visual state before update
@@ -447,10 +499,28 @@ export class OfficeState {
         }
       }
 
-      // Temporarily unblock own seat so character can pathfind to it
-      this.withOwnSeatUnblocked(ch, () =>
-        updateCharacter(ch, dt, this.walkableTiles, this.seats, this.tileMap, this.blockedTiles, this.characterScale, () => this.findFreeRestSeat())
-      )
+      if (this.choreo.isBusy(ch.id)) {
+        // Hand-off walk (engine/choreography.ts) instead of the normal state machine
+        this.choreo.update(ch, dt)
+        this.dirty = true
+        wakeIn(0)
+      } else {
+        // Temporarily unblock own seat so character can pathfind to it
+        this.withOwnSeatUnblocked(ch, () =>
+          updateCharacter(ch, dt, this.walkableTiles, this.seats, this.tileMap, this.blockedTiles, this.characterScale, () => this.findFreeRestSeat())
+        )
+      }
+
+      // Tick the received-paper flash
+      if (ch.paperTimer && ch.paperTimer > 0) {
+        ch.paperTimer -= dt
+        if (ch.paperTimer <= 0) {
+          ch.paperTimer = 0
+          this.dirty = true
+        } else {
+          wakeIn(ch.paperTimer)
+        }
+      }
 
       // Tick bubble timer
       if (ch.bubbleType === 'waiting') {
@@ -478,17 +548,33 @@ export class OfficeState {
         this.dirty = true
       }
 
-      // Keep the loop alive (but skip rendering) while any timer is counting down.
-      // Without this the loop sleeps and timers never decrement.
-      if (!this.needsTick) {
-        if ((ch.state === CharacterState.IDLE && (ch.wanderTimer > 0 || ch.seatTimer > 0)) ||
-            (ch.state === CharacterState.TYPE && !ch.isActive && ch.seatTimer > 0) ||
-            (ch.bubbleType === 'waiting' && ch.bubbleTimer > 0) ||
-            (ch.speechText && ch.speechTimer > 0)) {
-          this.needsTick = true
-        }
+      // When does this character next need an update? The loop sleeps until the
+      // earliest one instead of ticking every frame (P1.4: idle scenes cost nothing).
+      if (ch.state === CharacterState.WALK) wakeIn(0)
+      else if (ch.state === CharacterState.TYPE) {
+        if (ch.isActive) wakeIn(Math.max(0, TYPE_FRAME_DURATION_SEC - ch.frameTimer))
+        else if (ch.seatTimer > 0) wakeIn(ch.seatTimer)
+      } else if (ch.state === CharacterState.IDLE) {
+        if (ch.isActive && ch.seatId) wakeIn(0)
+        else if (ch.restSeatId && ch.seatTimer > 0) wakeIn(ch.seatTimer)
+        else wakeIn(Math.max(0, ch.wanderTimer))
+      }
+      if (ch.bubbleType === 'waiting' && ch.bubbleTimer > 0) wakeIn(ch.bubbleTimer)
+      if (ch.speechText && ch.speechTimer > 0) wakeIn(ch.speechTimer)
+    }
+
+    // Subagent cues fade out on their own
+    for (const [charId, left] of this.subagentCues) {
+      const next = left - dt
+      if (next <= 0 || !this.characters.has(charId)) {
+        this.subagentCues.delete(charId)
+        this.dirty = true
+      } else {
+        this.subagentCues.set(charId, next)
+        wakeIn(next)
       }
     }
+    this.nextWakeSec = wake
 
     // Remove characters that finished despawn
     if (toDelete.length > 0) {
@@ -505,6 +591,157 @@ export class OfficeState {
     }
   }
 
+  // ── Boss flow API (P1.4–P1.6) ─────────────────────────────────
+
+  getCharIdOf(agentId: string): number | undefined {
+    return this.agentIdToCharId.get(agentId)
+  }
+
+  /** Add the Boss (the human) at the Boss's desk, or remove it (null). */
+  setBoss(agentId: string, info: { label: string; labelColor: string; palette: number; hueShift: number } | null): void {
+    const existing = this.agentIdToCharId.get(agentId)
+    if (!info) {
+      if (existing !== undefined) this.removeCharacter(agentId)
+      return
+    }
+    if (existing !== undefined) {
+      const ch = this.characters.get(existing)
+      if (ch) {
+        ch.label = info.label
+        ch.labelColor = info.labelColor
+        this.markDirty()
+      }
+      return
+    }
+    const charId = this.nextCharId++
+    this.agentIdToCharId.set(agentId, charId)
+    this.charIdToAgentId.set(charId, agentId)
+    const ch = createCharacter(charId, info.palette, null, null, info.hueShift, CharacterState.IDLE)
+    ch.isBoss = true
+    ch.label = info.label
+    ch.labelColor = info.labelColor
+    ch.matrixEffect = 'spawn'
+    ch.matrixEffectTimer = 0
+    ch.matrixEffectSeeds = matrixEffectSeeds()
+    this.placeBoss(ch)
+    this.characters.set(charId, ch)
+    this._charListDirty = true
+    this.markDirty()
+  }
+
+  /** Seat the Boss at a "boss" chair; layouts without one get a fixed standing spot. */
+  private placeBoss(ch: Character): void {
+    let seat: Seat | undefined
+    for (const s of this.seats.values()) {
+      if (s.isBoss && (!s.assigned || s.uid === ch.seatId)) { seat = s; break }
+    }
+    ch.path = []
+    ch.moveProgress = 0
+    ch.frame = 0
+    if (seat) {
+      seat.assigned = true
+      ch.seatId = seat.uid
+      ch.tileCol = seat.seatCol
+      ch.tileRow = seat.seatRow
+      ch.dir = seat.facingDir
+      ch.state = CharacterState.TYPE
+      ch.seatTimer = Infinity
+    } else {
+      // Bottom-right-most walkable tile: out of the way, but reachable
+      const spot = [...this.walkableTiles].sort((a, b) => (b.row - a.row) || (b.col - a.col))[0] ?? { col: 1, row: 1 }
+      ch.seatId = null
+      ch.tileCol = spot.col
+      ch.tileRow = spot.row
+      ch.dir = Direction.UP
+      ch.state = CharacterState.IDLE
+      ch.wanderTimer = Infinity
+    }
+    ch.x = ch.tileCol * TILE_SIZE + TILE_SIZE / 2
+    ch.y = ch.tileRow * TILE_SIZE + TILE_SIZE / 2
+  }
+
+  /** Queue a hand-off walk for a character (no-op when the giver is not in the scene). */
+  playHandoff(req: Omit<HandoffRequest, 'fromCharId' | 'toCharId'> & { fromAgentId: string; toAgentId: string }): boolean {
+    const fromCharId = this.agentIdToCharId.get(req.fromAgentId)
+    const toCharId = this.agentIdToCharId.get(req.toAgentId) ?? null
+    if (fromCharId === undefined) {
+      // No giver on screen: the recipient just shows the paper
+      if (toCharId !== null) {
+        const to = this.characters.get(toCharId)
+        if (to) {
+          to.paperTimer = 1.5
+          this.say(to, req.bubbleText)
+        }
+      }
+      req.resolve()
+      this.markDirty()
+      return false
+    }
+    this.choreo.enqueue({ fromCharId, toCharId, bubbleText: req.bubbleText, deadline: req.deadline, instant: req.instant, resolve: req.resolve })
+    this.markDirty()
+    return true
+  }
+
+  /** Finish every hand-off now and put everyone with a seat on it (reconnect, §7.7). */
+  snapToSeats(): void {
+    this.choreo.finishAll()
+    for (const ch of this.characters.values()) {
+      ch.carrying = false
+      ch.paperTimer = 0
+      if (ch.matrixEffect === 'despawn') continue
+      const seat = ch.seatId ? this.seats.get(ch.seatId) : undefined
+      if (!seat) continue
+      if (ch.restSeatId) {
+        const rs = this.seats.get(ch.restSeatId)
+        if (rs) rs.assigned = false
+        ch.restSeatId = null
+      }
+      ch.path = []
+      ch.moveProgress = 0
+      ch.tileCol = seat.seatCol
+      ch.tileRow = seat.seatRow
+      ch.x = seat.seatCol * TILE_SIZE + TILE_SIZE / 2
+      ch.y = seat.seatRow * TILE_SIZE + TILE_SIZE / 2
+      ch.dir = seat.facingDir
+      ch.state = CharacterState.TYPE
+      ch.frame = 0
+      ch.seatTimer = ch.isBoss ? Infinity : ch.isActive ? 0 : SEAT_REST_ON_SNAP_SEC
+    }
+    this.markDirty()
+  }
+
+  /** Finish hand-offs instantly (tab hidden) without moving anyone else. */
+  finishHandoffs(): void {
+    if (!this.choreo.hasWork()) return
+    this.choreo.finishAll()
+    this.markDirty()
+  }
+
+  /** Show or hide the queue board next to a character (count 0 hides it). */
+  setTaskBoard(agentId: string | null, count: number): void {
+    const charId = agentId ? this.agentIdToCharId.get(agentId) : undefined
+    const next = charId !== undefined && count > 0 ? { charId, count } : null
+    if (next?.charId === this.taskBoard?.charId && next?.count === this.taskBoard?.count) return
+    this.taskBoard = next
+    if (!next) this.taskBoardRect = null
+    this.markDirty()
+  }
+
+  /** Mini subagent sprite next to a character for a few seconds. */
+  showSubagent(agentId: string, seconds: number): void {
+    const charId = this.agentIdToCharId.get(agentId)
+    if (charId === undefined) return
+    this.subagentCues.set(charId, seconds)
+    this.markDirty()
+  }
+
+  /** The Boss or the task board under a world position, if any. */
+  getObjectAtPixel(worldX: number, worldY: number): SceneObjectId | null {
+    const r = this.taskBoardRect
+    if (r && worldX >= r.x && worldX <= r.x + r.w && worldY >= r.y && worldY <= r.y + r.h) return 'task-board'
+    return null
+  }
+
   // ── Test helpers ─────────────────────────────────────────────
 
   /** Spawn test characters to fill all work seats (for layout testing) */
@@ -514,7 +751,7 @@ export class OfficeState {
 
     let idx = 0
     for (const [uid, seat] of this.seats) {
-      if (seat.isRest || seat.assigned) continue
+      if (seat.isRest || seat.isBoss || seat.assigned) continue
       const agentId = `__test_${idx}`
       const charId = this.nextCharId++
       this.agentIdToCharId.set(agentId, charId)
@@ -565,7 +802,7 @@ export class OfficeState {
 
   private findFreeSeat(): string | null {
     for (const [uid, seat] of this.seats) {
-      if (!seat.assigned && !seat.isRest) return uid
+      if (!seat.assigned && !seat.isRest && !seat.isBoss) return uid
     }
     return null
   }

@@ -133,6 +133,11 @@ function orientationToFacing(orientation: string): Direction {
  *
  * Chairs (C) without an adjacent desk do NOT generate seats (e.g. sofas).
  */
+/** Furniture whose uid starts with "boss" belongs to the Boss's office (P1.5). */
+export function isBossFurniture(uid: string): boolean {
+  return uid.startsWith('boss')
+}
+
 export function layoutToSeats(furniture: PlacedFurniture[]): Map<string, Seat> {
   const seats = new Map<string, Seat>()
 
@@ -206,6 +211,7 @@ export function layoutToSeats(furniture: PlacedFurniture[]): Map<string, Seat> {
         seatRow: bestChair.item.row,
         facingDir: bestChair.facingDesk,
         assigned: false,
+        ...(isBossFurniture(bestChair.item.uid) ? { isBoss: true } : {}),
       })
     } else {
       // Desk with no nearby chair → standing work seat at desk position
@@ -260,20 +266,40 @@ export function createDefaultLayout(): OfficeLayout {
     }
   }
 
+  // Boss office (P1.5): bottom-right corner, walled off with a door on its left wall.
+  // Interior cols 14-19, rows 14-19; wall along row 13 and col 13; door at (13, 17).
+  const BOSS_WALL_ROW = 13
+  const BOSS_WALL_COL = 13
+  const BOSS_DOOR_ROW = 17
+  const bossFloor: FloorColor = { h: 25, s: 45, b: 8, c: 0 }
+  for (let r = BOSS_WALL_ROW; r < ROWS - 1; r++) {
+    for (let c = BOSS_WALL_COL; c < COLS - 1; c++) {
+      const idx = r * COLS + c
+      const isWall = r === BOSS_WALL_ROW || (c === BOSS_WALL_COL && r !== BOSS_DOOR_ROW)
+      tiles[idx] = isWall ? W : F
+      tileColors[idx] = isWall ? null : bossFloor
+    }
+  }
+
   // Generate desks + chairs in a grid pattern
   // Desk (2x2) at (col, row), chair (1x1) at (col, row+2)
-  // Columns: 3, 7, 11, 15 — Rows: 2, 6, 10, 14
+  // Columns: 3, 7, 11, 15 — Rows: 2, 6, 10, 14 (the desk at 15,14 is the Boss's)
   const furniture: PlacedFurniture[] = []
   let deskIdx = 0
   const deskCols = [3, 7, 11, 15]
   const deskRows = [2, 6, 10, 14]
   for (const row of deskRows) {
     for (const col of deskCols) {
+      if (col === 15 && row === 14) continue
       deskIdx++
       furniture.push({ uid: `desk-${deskIdx}`, type: FurnitureType.DESK, col, row })
       furniture.push({ uid: `ch-${deskIdx}`, type: FurnitureType.CHAIR, col, row: row + 2 })
     }
   }
+  furniture.push({ uid: 'boss-desk', type: FurnitureType.DESK, col: 16, row: 14 })
+  furniture.push({ uid: 'boss-chair', type: FurnitureType.CHAIR, col: 16, row: 16 })
+  furniture.push({ uid: 'boss-lamp', type: FurnitureType.LAMP, col: 14, row: 14 })
+  furniture.push({ uid: 'boss-shelf', type: FurnitureType.BOOKSHELF, col: 19, row: 14 })
   // Decor along walls
   furniture.push({ uid: 'plant-1',  type: FurnitureType.PLANT, col: 1, row: 1 })
   furniture.push({ uid: 'plant-2',  type: FurnitureType.PLANT, col: 19, row: 1 })

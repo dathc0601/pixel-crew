@@ -4,6 +4,7 @@ import { getCachedSprite, getOutlineSprite } from '../sprites/spriteCache'
 import { getCharacterSprites, BUBBLE_PERMISSION_SPRITE, BUBBLE_WORKING_SPRITE, BUBBLE_WAITING_SPRITE } from '../sprites/spriteData'
 import { getCharacterSprite } from './characters'
 import { renderMatrixEffect } from './matrixEffect'
+import { renderBossFlowOverlays, type BossFlowOverlays } from './bossFlowRenderer'
 import { getColorizedFloorSprite, hasFloorSprites, WALL_COLOR } from '../floorTiles'
 import { hasWallSprites, getWallInstances, wallColorToHex } from '../wallTiles'
 import {
@@ -620,6 +621,7 @@ export function renderFrame(
   editor?: EditorRenderState,
   backgroundImage?: HTMLImageElement | null,
   characterScale?: number,
+  bossFlow?: BossFlowOverlays,
 ): { offsetX: number; offsetY: number } {
   const charScale = characterScale ?? 1
   // Clear
@@ -657,6 +659,9 @@ export function renderFrame(
 
   // Draw walls + furniture + characters (z-sorted)
   renderScene(ctx, allFurniture, characters, offsetX, offsetY, zoom, selectedAgentId, hoveredAgentId, charScale)
+
+  // Boss crown, hand-off papers, queue board, subagent cue
+  if (bossFlow) renderBossFlowOverlays(ctx, characters, offsetX, offsetY, zoom, charScale, bossFlow)
 
   // Agent name badges (drawn before bubbles so bubbles cover them)
   renderNameBadges(ctx, characters, offsetX, offsetY, zoom, charScale)

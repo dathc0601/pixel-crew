@@ -38,6 +38,12 @@ export const CharacterState = {
   IDLE: 'idle',
   WALK: 'walk',
   TYPE: 'type',
+  /** Choreography: walking a paper over to someone (engine/choreography.ts) */
+  WALK_TO: 'walk_to',
+  /** Choreography: standing face to face, handing the paper over */
+  HANDOFF: 'handoff',
+  /** Choreography: walking back to where the hand-off started */
+  RETURN: 'return',
 } as const
 export type CharacterState = (typeof CharacterState)[keyof typeof CharacterState]
 
@@ -64,6 +70,8 @@ export interface Seat {
   assigned: boolean
   /** Rest seat (sofa etc.) — characters sit here when idle, not for work */
   isRest?: boolean
+  /** The Boss's chair (chair uid starts with "boss"); never handed to an agent */
+  isBoss?: boolean
 }
 
 export interface FurnitureInstance {
@@ -223,4 +231,10 @@ export interface Character {
   label: string | null
   /** Background color for the label badge */
   labelColor: string | null
+  /** The Boss (the human user): never wanders, drawn with a crown */
+  isBoss?: boolean
+  /** Holding a paper (hand-off prop) */
+  carrying?: boolean
+  /** Seconds left showing a just-received paper */
+  paperTimer?: number
 }

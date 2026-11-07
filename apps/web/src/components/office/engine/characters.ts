@@ -102,9 +102,15 @@ export function updateCharacter(
 
   switch (ch.state) {
     case CharacterState.TYPE: {
-      if (ch.frameTimer >= TYPE_FRAME_DURATION_SEC) {
-        ch.frameTimer -= TYPE_FRAME_DURATION_SEC
-        ch.frame = (ch.frame + 1) % 2
+      // Only working characters type; resting ones sit still (lets the render loop sleep)
+      if (ch.isActive) {
+        if (ch.frameTimer >= TYPE_FRAME_DURATION_SEC) {
+          ch.frameTimer -= TYPE_FRAME_DURATION_SEC
+          ch.frame = (ch.frame + 1) % 2
+        }
+      } else {
+        ch.frame = 0
+        ch.frameTimer = 0
       }
       if (!ch.isActive) {
         if (ch.seatTimer > 0) {
@@ -349,8 +355,11 @@ export function getCharacterSprite(ch: Character, sprites: CharacterSprites | nu
       }
       return sprites.typing[ch.dir][ch.frame % 2]
     case CharacterState.WALK:
+    case CharacterState.WALK_TO:
+    case CharacterState.RETURN:
       return sprites.walk[ch.dir][ch.frame % 4]
     case CharacterState.IDLE:
+    case CharacterState.HANDOFF:
       return sprites.walk[ch.dir][1]
     default:
       return sprites.walk[ch.dir][1]

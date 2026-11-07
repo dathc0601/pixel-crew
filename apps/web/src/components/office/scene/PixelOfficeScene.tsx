@@ -14,6 +14,7 @@ import { EditorState } from "../editor/editorState";
 import { getFurnitureAtTile } from "../editor/editorActions";
 import type { SceneComponentProps } from "./SceneAdapter";
 import { PixelSceneAdapter } from "./PixelSceneAdapter";
+import { BOSS_AGENT_ID } from "@pixel-crew/shared";
 
 export interface PixelOfficeSceneProps extends SceneComponentProps {
   editMode: boolean;
@@ -30,6 +31,22 @@ export interface PixelOfficeSceneProps extends SceneComponentProps {
   onAssetsLoaded?: () => void;
   zoomRef: React.MutableRefObject<number>;
   panRef: React.MutableRefObject<{ x: number; y: number }>;
+}
+
+/** Route clicks on the Boss or the task board to the adapter's handler. True when handled. */
+function handleObjectClick(officeState: OfficeState, worldX: number, worldY: number): boolean {
+  const handler = officeState.onObjectClick;
+  if (!handler) return false;
+  const obj = officeState.getObjectAtPixel(worldX, worldY);
+  if (obj) {
+    handler(obj);
+    return true;
+  }
+  if (officeState.getAgentAtPixel(worldX, worldY) === BOSS_AGENT_ID) {
+    handler("boss");
+    return true;
+  }
+  return false;
 }
 
 export default function PixelOfficeScene({
@@ -128,6 +145,8 @@ export default function PixelOfficeScene({
     // Init state — start with empty default, office zip will be loaded via onAssetsLoaded
     const officeState = new OfficeState();
     officeStateRef.current = officeState;
+    // Dev builds only: lets browser tests and the console inspect the scene
+    if (process.env.NODE_ENV !== "production") (window as unknown as { __pixelCrewOffice?: OfficeState }).__pixelCrewOffice = officeState;
 
     // Now that OfficeState exists, notify parent to load office zip
     onAssetsLoadedRef.current?.();
@@ -176,7 +195,7 @@ export default function PixelOfficeScene({
           return false;
         };
       })(),
-      needsTick: () => officeState.needsTick,
+      nextWakeMs: () => (officeState.nextWakeSec === null ? null : officeState.nextWakeSec * 1000),
       render: (ctx) => {
         const cw = canvas.width / dpr;
         const ch = canvas.height / dpr;
@@ -259,6 +278,11 @@ export default function PixelOfficeScene({
           editorRenderState,
           officeState.backgroundImage,
           officeState.characterScale,
+          {
+            taskBoard: officeState.taskBoard,
+            subagentCues: officeState.subagentCues,
+            setTaskBoardRect: (rect) => { officeState.taskBoardRect = rect; },
+          },
         );
         lastOffsetsRef.current = result;
         editorRenderRef.current = editorRenderState ?? null;
@@ -414,8 +438,9 @@ export default function PixelOfficeScene({
       return;
     }
 
-    // Normal mode: agent click
+    // Normal mode: scene objects (Boss, task board), then agents
     const world = screenToWorld(e.clientX, e.clientY);
+    if (handleObjectClick(officeState, world.x, world.y)) return;
     const agentId = officeState.getAgentAtPixel(world.x, world.y);
     if (agentId) {
       onAgentClickRef.current(agentId);
@@ -490,6 +515,7 @@ export default function PixelOfficeScene({
           const officeState = officeStateRef.current;
           if (officeState) {
             const world = screenToWorld(touch.clientX, touch.clientY);
+            if (handleObjectClick(officeState, world.x, world.y)) return;
             const agentId = officeState.getAgentAtPixel(world.x, world.y);
             if (agentId) {
               onAgentClickRef.current(agentId);
