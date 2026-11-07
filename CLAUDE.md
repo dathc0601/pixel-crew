@@ -15,6 +15,7 @@ Fork of longyangxi/OpenOffice (bit-office), MIT. Workspace packages: `pixel-crew
 ## Key Commands
 - `pnpm dev:web` - Start web dev server
 - `pnpm dev:gateway` - Start gateway
+- `pnpm dev:demo` - Start gateway in demo mode (scripted fake agents, no tokens)
 - `pnpm typecheck` / `pnpm test` / `pnpm lint` - Checks (CI runs them on ubuntu, macOS, windows)
 - Tests use the fake backend (`id: "fake"`); never start a real AI CLI in tests
 
@@ -43,6 +44,12 @@ Fork of longyangxi/OpenOffice (bit-office), MIT. Workspace packages: `pixel-crew
 Only 4 key events shown in UI: TASK_STARTED, APPROVAL_NEEDED, TASK_DONE, TASK_FAILED.
 Agent states: idle, working, waiting_approval, done, error.
 TASK_DONE includes structured result (changedFiles, diffStat, testResult).
+
+## Boss flow (Phase 1)
+- Protocol (`packages/shared`): `BOSS_ASSIGN {prompt, urgent, allowLeadSelfWork?, allowSubagents?}` (flags only narrow `office.lead`, except `urgent_only` + urgent + `true`), `GET/SET_OFFICE_CONFIG` (owner-only; `null` resets a key), `RESUME_POOL`, `CANCEL_WORK_ITEM`; events `WORK_ITEM_UPDATED`, `HANDOFF` (Boss id `"boss"`, daemon-owned `durationMs`), `LEAD_WAITING`, `LEAD_SELF_WORK`, `LEAD_SUBAGENT_STARTED`, `OFFICE_CONFIG`, `GATEWAY_INFO {demo}`.
+- Daemon: `packages/orchestrator/src/{dispatcher,work-item,lead-policy}.ts`; restored pool items are `held` until `RESUME_POOL`.
+- UI: `apps/web/src/store/boss-flow-store.ts`, `components/office/bossflow/`, `engine/choreography.ts` (walks), `engine/bossFlowRenderer.ts`, `ui/BossFlowLayer.tsx` (+ `BossComposer`, `TaskQueueDialog`, `OfficeSettingsPanel`). Keep new features out of `app/office/page.tsx` and `office-store.ts`.
+- Demo mode: `pnpm dev:demo` (or `--demo` / `PIXEL_CREW_DEMO=1`): every agent is the scripted fake backend (`apps/gateway/src/demo-mode.ts`), data dir `~/.pixel-crew-demo` unless `PIXEL_CREW_HOME` is set, DEMO badge in the UI. Never enabled from config.json.
 
 ## Team Execution Flow
 Phases: CREATE → DESIGN → EXECUTE → COMPLETE → (loop or END).

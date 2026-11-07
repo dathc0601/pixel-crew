@@ -1,7 +1,7 @@
 # Fork Improvement Plan: from "Open Office" to a pixel-art AI mini company
 
 Date: 2026-11-07
-Status: owner decisions recorded (§0). Phase 0 merged (2026-11-07). Phase 1 daemon side implemented on branch `phase-1-boss-flow` (2026-11-07); UI items (P1.4–P1.6, P1.8) pending. See the status lines under each item.
+Status: owner decisions recorded (§0). Phase 0 merged (2026-11-07). Phase 1 (daemon and UI) implemented on branch `phase-1-boss-flow` (2026-11-07), with a token-free demo mode (`pnpm dev:demo`). See the status lines under each item.
 Scope: `~/WebstormProjects/OpenOffice`. `origin` is `github.com/dathc0601/pixel-crew` (renamed from OpenOffice on 2026-11-07); `upstream` is `github.com/longyangxi/OpenOffice` (formerly "bit-office", MIT).
 
 Legend used throughout:
@@ -23,7 +23,7 @@ Legend used throughout:
 5. **v1 is Claude Code only.** Phase 2 (ACP, other vendors, Antigravity) moves to a later version. When it starts, port logic from projects that already integrate those CLIs (pixtuoid, acpx, claw-orchestrator, ORCH) and credit them.
 6. **Upstream PR for the P0.1 security fix: deferred.** Fix it in the fork first. Ask the owner again when the project is complete.
 
-**Status (2026-11-07):** the `office` section is implemented (zod schema in `packages/shared/src/office-config.ts`, loader + hot reload in `apps/gateway/src/office-config.ts`, plus `backendPermissions` for the per-backend bypass opt-in). UI toggles and dispatcher enforcement remain Phase 1.
+**Status (2026-11-07):** the `office` section is implemented (zod schema in `packages/shared/src/office-config.ts`, loader + hot reload in `apps/gateway/src/office-config.ts`, plus `backendPermissions` for the per-backend bypass opt-in). Dispatcher enforcement and the owner-only office settings panel (`ui/OfficeSettingsPanel.tsx`, incl. "Revoke all devices") landed in Phase 1.
 
 **Config file shape** (in `~/.pixel-crew/config.json`; the daemon hot-reloads on file change; UI edits go through an owner-authenticated command and are written back to the file):
 ```json
@@ -375,7 +375,7 @@ Each task lists its goal, the files involved, the approach, acceptance criteria,
 - *Acceptance:* Schemas are covered by unit tests. Old clients ignore the unknown events. Make the client use `safeParse` and drop unknown events instead of throwing.
 
 **P1.4 Scene choreography API (M).**
-- **Status: TODO (UI).**
+- **Status: DONE.** `engine/choreography.ts` (WALK_TO / HANDOFF / RETURN, per-character queue, speed fitted to `durationMs` and clamped to 24–192 px/s with skip-ahead, instant bubble for 0 ms / hidden tab / reduced motion / no path, snap to seats on reconnect); `playHandoff`/`setBoss` on the adapters; the game loop now sleeps on timers instead of polling rAF (0 frames over 3 s when idle, measured in the browser).
 - *Files:* `scene/SceneAdapter.ts` (add `playHandoff(fromId, toId, opts): Promise<void>` and `setBoss(info)`), `scene/PixelSceneAdapter.ts`, `engine/characters.ts`, `engine/officeState.ts`, `layout/tileMap.ts`, `scene/useSceneBridge.ts`.
 - *Approach:*
   - Add character states `WALK_TO` (target = a walkable tile adjacent to the recipient's seat, found with BFS over neighbours), `HANDOFF` (about 600 ms: face each other, show a paper prop and a speech bubble with the label), and `RETURN` (walk back to own seat).
@@ -389,7 +389,7 @@ Each task lists its goal, the files involved, the approach, acceptance criteria,
 - *Risk:* Seat-blocked tiles (`blockedTiles`). Reuse the existing `findPath` with the target tile temporarily unblocked.
 
 **P1.5 Boss character and task composer (M).**
-- **Status: TODO (UI).** Daemon side (`BOSS_ASSIGN`) is ready.
+- **Status: DONE.** Crowned Boss seated in a walled Boss office carved into the default layout (`boss-*` furniture; other layouts get a standing spot); `ui/BossComposer.tsx` sends `BOSS_ASSIGN`, with narrowing-only toggles and a one-line effective-policy summary (`bossflow/policy.ts`).
 - *Files:* new `components/office/ui/BossComposer.tsx`; changes to `app/office/page.tsx`, `store/office-store.ts`, `engine/officeState.ts`.
 - *Approach:*
   - The Boss is a local-only character with a distinct sprite, seated in the Boss room.
@@ -397,11 +397,11 @@ Each task lists its goal, the files involved, the approach, acceptance criteria,
   - Submitting sends `BOSS_ASSIGN`, and the daemon emits `HANDOFF boss_to_lead`.
 - *Acceptance:* A first-time user completes Boss → Lead → Dev without opening a side panel.
 
-**P1.6 Lead waiting and queue visualization (S).** **Status: TODO (UI);** `LEAD_WAITING` and `WORK_ITEM_UPDATED` (also replayed on `PING`) are emitted. When `LEAD_WAITING` fires, the Lead stands at a "task board" furniture item (or shows a clock bubble) holding N papers. Clicking the board lists the queued work items. *Acceptance:* the queue length on the board matches the daemon state.
+**P1.6 Lead waiting and queue visualization (S).** **Status: DONE.** Cork board with one paper per queued item beside the Lead (count derived from the replayed work items), click → `ui/TaskQueueDialog.tsx`; subagent mini-sprite and self-work bubble cues. When `LEAD_WAITING` fires, the Lead stands at a "task board" furniture item (or shows a clock bubble) holding N papers. Clicking the board lists the queued work items. *Acceptance:* the queue length on the board matches the daemon state.
 
-**P1.7 Opt-out of the auto "greet" Lead run (S).** **Status: DONE** for `CREATE_TEAM` (no Lead run until the Boss assigns work); `END_PROJECT` still greets. `apps/gateway/src/index.ts:660`: creating a team should not spend tokens until the Boss assigns something.
+**P1.7 Opt-out of the auto "greet" Lead run (S).** **Status: DONE** for `CREATE_TEAM` and `END_PROJECT` (`apps/gateway/src/project-commands.ts`, tested); restored pool items stay held until `RESUME_POOL` (UI prompt "Resume N queued tasks?"). `apps/gateway/src/index.ts:660`: creating a team should not spend tokens until the Boss assigns something.
 
-**P1.8 Split the monoliths opportunistically (M).** **Status: TODO (UI).** Extract the hand-off and Boss features into their own modules instead of growing `app/office/page.tsx` (2675 lines) and `office-store.ts` (1172 lines). Don't do a big-bang refactor.
+**P1.8 Split the monoliths opportunistically (M).** **Status: DONE** for Phase 1: new code lives in `store/boss-flow-store.ts`, `components/office/bossflow/`, `ui/Boss*`/`TaskQueueDialog`/`OfficeSettingsPanel`; `page.tsx` +2 lines, `office-store.ts` +3 lines. Extract the hand-off and Boss features into their own modules instead of growing `app/office/page.tsx` (2675 lines) and `office-store.ts` (1172 lines). Don't do a big-bang refactor.
 
 ### Phase 2 — Multi-vendor: ACP, Antigravity, attach vs spawn (about 2–3 weeks)
 
