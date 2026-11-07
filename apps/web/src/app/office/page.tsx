@@ -323,7 +323,7 @@ export default function OfficePage() {
           fetch(url)
             .then(r => r.blob())
             .then(blob => {
-              const name = imgPath.split("/").pop() || "image.png";
+              const name = imgPath.split(/[\\/]/).pop() || "image.png";
               const file = new File([blob], name, { type: blob.type || "image/png" });
               const reader = new FileReader();
               reader.onload = () => {

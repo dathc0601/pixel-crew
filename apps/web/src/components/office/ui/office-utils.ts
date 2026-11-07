@@ -93,8 +93,8 @@ export function computePreviewUrl(result: { previewUrl?: string; previewCmd?: st
   const base = getPreviewBase();
   if (result.previewUrl) return tunnelRewrite(result.previewUrl);
   if (result.previewCmd && result.previewPort) return `${base}/preview-app`;
-  if (result.previewPath) return `${base}/preview-static/${result.previewPath.split("/").pop()}`;
-  if (result.entryFile && /\.html?$/i.test(result.entryFile)) return `${base}/preview-static/${result.entryFile.split("/").pop()}`;
+  if (result.previewPath) return `${base}/preview-static/${result.previewPath.split(/[\\/]/).pop()}`;
+  if (result.entryFile && /\.html?$/i.test(result.entryFile)) return `${base}/preview-static/${result.entryFile.split(/[\\/]/).pop()}`;
   return undefined;
 }
 

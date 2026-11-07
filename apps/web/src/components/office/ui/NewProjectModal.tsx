@@ -36,7 +36,7 @@ export default function NewProjectModal({
       setDirectory(path);
       // Auto-fill name from folder name if empty
       if (!name) {
-        const folderName = path.split("/").filter(Boolean).pop() || "";
+        const folderName = path.split(/[\\/]/).filter(Boolean).pop() || "";
         setName(folderName);
       }
     });
@@ -45,7 +45,7 @@ export default function NewProjectModal({
 
   const handleCreate = useCallback(() => {
     if (!directory.trim()) return;
-    const projectName = name.trim() || directory.split("/").filter(Boolean).pop() || "untitled";
+    const projectName = name.trim() || directory.split(/[\\/]/).filter(Boolean).pop() || "untitled";
     const projectId = createProject(projectName, directory.trim());
     onCreated(projectId, mode);
     // Reset form

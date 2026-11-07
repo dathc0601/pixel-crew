@@ -27,7 +27,7 @@ export function extractSessionSummary(data: TaskCompletionData): SessionSummary 
     decisions: extractDecisions(stdout),
     filesChanged: changedFiles.map(f => {
       // Shorten absolute paths to relative-ish basenames
-      const parts = f.split("/");
+      const parts = f.split(/[\\/]/);
       // Keep last 3 segments: e.g. "src/components/MultiPaneView.tsx"
       return parts.length > 3 ? parts.slice(-3).join("/") : f;
     }),
@@ -112,7 +112,7 @@ function extractWhat(stdout: string, parsedSummary?: string): string {
 
 function shortenFiles(files: string[]): string[] {
   return files.map(f => {
-    const parts = f.split("/");
+    const parts = f.split(/[\\/]/);
     return parts.length > 3 ? parts.slice(-3).join("/") : f;
   });
 }
