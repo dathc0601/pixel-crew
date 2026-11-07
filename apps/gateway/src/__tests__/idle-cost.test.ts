@@ -10,12 +10,13 @@ import { createRotatingLog, capLine, MAX_LINE_BYTES } from "../file-logger.js";
 
 describe("external agent scanner", () => {
   it("polls only when enabled, outside demo mode, and while someone watches", () => {
-    const base = { enabled: true, demo: false, wsViewers: 1, ablyActive: false };
+    const base = { enabled: true, demo: false, wsViewers: 1, ablyActive: false, platform: "linux" as const };
     assert.equal(shouldScanExternalAgents(base), true);
     assert.equal(shouldScanExternalAgents({ ...base, enabled: false }), false);
     assert.equal(shouldScanExternalAgents({ ...base, demo: true }), false);
     assert.equal(shouldScanExternalAgents({ ...base, wsViewers: 0 }), false);
     assert.equal(shouldScanExternalAgents({ ...base, wsViewers: 0, ablyActive: true }), true);
+    assert.equal(shouldScanExternalAgents({ ...base, platform: "win32" }), false, "ps/lsof do not exist on Windows");
   });
 
   it("stops its timer when inactive and scans at once when resumed", () => {

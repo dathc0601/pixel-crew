@@ -262,6 +262,14 @@ export class ProcessScanner {
  * only when the feature is on, never in demo mode, and only while a viewer is connected.
  * Ably viewers cannot be counted, so an active Ably channel counts as a viewer.
  */
-export function shouldScanExternalAgents(s: { enabled: boolean; demo: boolean; wsViewers: number; ablyActive: boolean }): boolean {
-  return s.enabled && !s.demo && (s.wsViewers > 0 || s.ablyActive);
+/**
+ * External-session discovery needs `ps` and `lsof`, so it is off on Windows (P5.1):
+ * Pixel Crew's own agents work there, CLI sessions started elsewhere are not shown.
+ */
+export function externalDiscoverySupported(platform: NodeJS.Platform = process.platform): boolean {
+  return platform !== "win32";
+}
+
+export function shouldScanExternalAgents(s: { enabled: boolean; demo: boolean; wsViewers: number; ablyActive: boolean; platform?: NodeJS.Platform }): boolean {
+  return s.enabled && !s.demo && externalDiscoverySupported(s.platform) && (s.wsViewers > 0 || s.ablyActive);
 }

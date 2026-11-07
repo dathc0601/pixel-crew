@@ -1,5 +1,4 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "fs";
-import { execSync } from "child_process";
 import path from "path";
 import { config } from "./config.js";
 
@@ -74,8 +73,9 @@ function writeRuntimeFile(state: GatewayRuntimeState): void {
   renameSync(tmp, RUNTIME_FILE);
 }
 
+/** Block the thread for `ms` without spawning `sleep` (works on Windows too). */
 function syncSleep(ms: number): void {
-  try { execSync(`sleep ${ms / 1000}`, { stdio: "ignore" }); } catch { /* ignore */ }
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 /** Send SIGTERM, wait up to 2s, then SIGKILL if still alive. */

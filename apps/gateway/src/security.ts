@@ -6,7 +6,7 @@
  */
 import type { IncomingMessage } from "http";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "fs";
-import { dirname } from "path";
+import { dirname, isAbsolute, relative, resolve, sep } from "path";
 import { randomBytes, timingSafeEqual } from "crypto";
 import type { UserRole } from "@pixel-crew/shared";
 
@@ -157,6 +157,17 @@ export function clientKey(req: IncomingMessage): string {
   const cf = req.headers["cf-connecting-ip"];
   if (isLoopbackAddress(remote) && typeof cf === "string" && cf) return `cf:${cf}`;
   return remote;
+}
+
+/**
+ * True when `candidate` is `root` or inside it, on any platform. Uses path.relative,
+ * so Windows separators, drive letters and case-insensitive roots are handled, and a
+ * sibling that only shares a prefix ("/srv/web-evil" vs "/srv/web") is rejected.
+ */
+export function isPathInside(root: string, candidate: string): boolean {
+  const rel = relative(resolve(root), resolve(candidate));
+  if (rel === "") return true;
+  return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
 
 /** Constant-time string comparison (for pair codes). */

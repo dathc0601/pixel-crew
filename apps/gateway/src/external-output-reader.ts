@@ -31,6 +31,38 @@ const SOURCE_EXTS = new Set([
  * - Claude: watches JSONL session transcripts in ~/.claude/projects/
  * - Others: runs lsof periodically to detect file activity
  */
+/**
+ * Claude Code's directory name for a project under ~/.claude/projects/.
+ * Read from the Claude Code 2.1.319 bundle (P5.1): every character outside [a-zA-Z0-9]
+ * becomes "-"; names over 200 characters are cut to 200 plus "-" and a base-36 hash
+ * (32-bit `(h << 5) - h + charCode`, absolute value) of the original path.
+ *   /Users/foo/my.app      → -Users-foo-my-app
+ *   C:\Users\foo\proj      → C--Users-foo-proj   (Windows: from the same code; not run on Windows)
+ */
+export function claudeProjectKey(cwd: string): string {
+  const key = cwd.replace(/[^a-zA-Z0-9]/g, "-");
+  if (key.length <= 200) return key;
+  let h = 0;
+  for (let i = 0; i < cwd.length; i++) h = ((h << 5) - h + cwd.charCodeAt(i)) | 0;
+  return `${key.slice(0, 200)}-${Math.abs(h).toString(36)}`;
+}
+
+/**
+ * The project directory for `cwd`. On Windows, drive-letter case can differ between the
+ * cwd we see and the one Claude saw (Claude compares keys case-insensitively there), so an
+ * existing directory is matched ignoring case.
+ */
+export function claudeProjectDir(cwd: string, projectsRoot = path.join(os.homedir(), ".claude", "projects"), platform: NodeJS.Platform = process.platform): string {
+  const key = claudeProjectKey(cwd);
+  const exact = path.join(projectsRoot, key);
+  if (platform !== "win32") return exact;
+  try {
+    const hit = readdirSync(projectsRoot).find((d) => d.toLowerCase() === key.toLowerCase());
+    if (hit) return path.join(projectsRoot, hit);
+  } catch { /* no projects dir yet */ }
+  return exact;
+}
+
 /** fs.watch callbacks within this window are coalesced into one read */
 export const WATCH_DEBOUNCE_MS = 100;
 
@@ -62,8 +94,10 @@ export class ExternalOutputReader {
 
     if (backendId === "claude" && cwd) {
       cleanup = this.startClaudeReader(agentId, cwd, onOutput);
-    } else {
+    } else if (process.platform !== "win32") {
       cleanup = this.startLsofReader(agentId, pid, onOutput);
+    } else {
+      cleanup = () => {}; // no lsof on Windows: status only
     }
 
     this.readers.set(agentId, { agentId, pid, cwd, backendId, onOutput, cleanup, inputTokens: 0, outputTokens: 0 });
@@ -90,11 +124,8 @@ export class ExternalOutputReader {
     cwd: string,
     onOutput: OutputCallback,
   ): () => void {
-    // Claude stores sessions in ~/.claude/projects/{key}/*.jsonl
-    // Key: cwd with "/" replaced by "-" — keeps the leading dash
-    // e.g. /Users/foo/project → -Users-foo-project
-    const projectKey = cwd.replace(/\//g, "-");
-    const projectDir = path.join(os.homedir(), ".claude", "projects", projectKey);
+    // Claude stores sessions in ~/.claude/projects/{key}/*.jsonl (key: see claudeProjectKey)
+    const projectDir = claudeProjectDir(cwd);
 
     console.log(`[OutputReader] Claude reader for ${agentId}: watching ${projectDir}`);
 

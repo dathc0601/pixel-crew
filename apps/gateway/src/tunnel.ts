@@ -7,6 +7,7 @@
 // ---------------------------------------------------------------------------
 
 import { spawn, execFileSync } from "child_process";
+import { killTree } from "@pixel-crew/orchestrator";
 import type { ChildProcess } from "child_process";
 import { config } from "./config.js";
 
@@ -43,7 +44,9 @@ export function startTunnel(): boolean {
   try {
     tunnelProcess = spawn("cloudflared", ["tunnel", "run", "--token", config.tunnelToken], {
       stdio: ["ignore", "pipe", "pipe"],
-      detached: true,
+      // Own process group on Unix; no console window on Windows (killTree uses taskkill /T there)
+      detached: process.platform !== "win32",
+      windowsHide: true,
     });
 
     tunnelProcess.stdout?.on("data", (data: Buffer) => {
@@ -80,13 +83,7 @@ export function startTunnel(): boolean {
  */
 export function stopTunnel(): void {
   if (!tunnelProcess) return;
-  try {
-    if (tunnelProcess.pid) {
-      process.kill(-tunnelProcess.pid, "SIGTERM");
-    } else {
-      tunnelProcess.kill("SIGTERM");
-    }
-  } catch {
+  if (!killTree(tunnelProcess.pid, "SIGTERM", { sync: true })) {
     try { tunnelProcess.kill("SIGTERM"); } catch { /* already dead */ }
   }
   console.log("[Tunnel] Stopped cloudflared");

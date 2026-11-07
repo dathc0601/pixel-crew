@@ -4,14 +4,14 @@ import "./root-guard.js";
 import { DEMO_MODE, DEMO_BACKEND_ID, DEMO_TEAM, resolveDemoAgentScript, writeDemoScenario } from "./demo-mode.js";
 import { registerChannel, initTransports, publishEvent, destroyTransports, reinitChannel, isChannelActive } from "./transport.js";
 import { wsChannel, setPairCode, sendToClient, revokeAllSessions, connectedClientCount, onClientCountChange } from "./ws-server.js";
-import { generatePairCode } from "./security.js";
+import { generatePairCode, isPathInside } from "./security.js";
 import { ablyChannel } from "./ably-client.js";
 import { telegramChannel, setTelegramAgentDefs, syncTelegramHiredAgents } from "./telegram-channel.js";
 import { config, CONFIG_DIR, hasSetupRun, reloadConfig, saveConfig, officeConfig, getOfficeConfig } from "./config.js";
 import { backendPermissionMode } from "@pixel-crew/shared";
 import { runSetup } from "./setup.js";
 import { detectBackends, getBackend, getAllBackends } from "./backends.js";
-import { createFakeBackend, FAKE_AGENT_SCRIPT, createOrchestrator, getMergeHistory, previewServer, recordProjectRatings, parseAgentOutput, setSessionDir, setStorageRoot, syncAgentDefs, type Orchestrator, type OrchestratorEvent, type RuntimeOwnerInfo, type TeamPhaseChangedEvent } from "@pixel-crew/orchestrator";
+import { createFakeBackend, FAKE_AGENT_SCRIPT, createOrchestrator, openExternal, getMergeHistory, previewServer, recordProjectRatings, parseAgentOutput, setSessionDir, setStorageRoot, syncAgentDefs, type Orchestrator, type OrchestratorEvent, type RuntimeOwnerInfo, type TeamPhaseChangedEvent } from "@pixel-crew/orchestrator";
 import type { Command, GatewayEvent, UserRole, WorkItem as WireWorkItem } from "@pixel-crew/shared";
 import type { WorkItem } from "@pixel-crew/orchestrator";
 import { broadcastOfficeConfigChanges, handleOfficeConfigCommand, isOfficeConfigCommand } from "./office-config-commands.js";
@@ -19,7 +19,7 @@ import { endProject } from "./project-commands.js";
 import type { CommandMeta } from "./transport.js";
 import { DEFAULT_AGENT_DEFS, type AgentDefinition } from "@pixel-crew/shared";
 import { nanoid } from "nanoid";
-import { exec, execFile, execFileSync, execSync } from "child_process";
+import { exec, execFileSync } from "child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, renameSync, unlinkSync, rmdirSync } from "fs";
 import path from "path";
 import os from "os";
@@ -116,13 +116,18 @@ function ensureTeamProjectDir(nameSource: string): string {
   setProjectName(projectName);
   const projectDir = createUniqueProjectDir(teamWorkDir || config.defaultWorkspace, projectName);
   try {
-    execSync("git init", { cwd: projectDir, stdio: "pipe" });
-    execSync("git -c user.name=PixelCrew -c user.email=bot@pixel-crew.local commit --allow-empty -m 'init'", { cwd: projectDir, stdio: "pipe" });
+    initProjectRepo(projectDir);
   } catch (err) {
     console.error(`[Gateway] Failed to init git: ${(err as Error).message}`);
   }
   orc.setTeamProjectDir(projectDir);
   return projectDir;
+}
+
+/** git init + an empty first commit, without a shell (same on every platform). */
+function initProjectRepo(projectDir: string): void {
+  execFileSync("git", ["init"], { cwd: projectDir, stdio: "pipe", windowsHide: true });
+  execFileSync("git", ["-c", "user.name=PixelCrew", "-c", "user.email=bot@pixel-crew.local", "commit", "--allow-empty", "-m", "init"], { cwd: projectDir, stdio: "pipe", windowsHide: true });
 }
 
 function showPairCode() {
@@ -645,7 +650,7 @@ function handleCommand(parsed: Command, meta: CommandMeta) {
       const resolved = path.resolve(config.defaultWorkspace, raw);
       const normalized = path.normalize(resolved);
 
-      if (!normalized.startsWith(config.defaultWorkspace + path.sep) && normalized !== config.defaultWorkspace) {
+      if (!isPathInside(config.defaultWorkspace, normalized)) {
         console.error(`[Gateway] Blocked OPEN_FILE: path "${raw}" resolves outside workspace`);
         break;
       }
@@ -655,9 +660,7 @@ function handleCommand(parsed: Command, meta: CommandMeta) {
       }
 
       console.log(`[Gateway] Opening file: ${normalized}`);
-      execFile("open", [normalized], (err) => {
-        if (err) console.error(`[Gateway] Failed to open file: ${err.message}`);
-      });
+      openExternal(normalized);
       break;
     }
     case "CREATE_TEAM": {
@@ -728,7 +731,7 @@ function handleCommand(parsed: Command, meta: CommandMeta) {
           // because external processes are not spawned by us with detached: true,
           // so their pgid may be the user's terminal — killing the group would
           // kill the entire terminal session.
-          process.kill(ext.pid, "SIGKILL");
+          process.kill(ext.pid, "SIGKILL"); // TerminateProcess on Windows
         } catch (err) {
           console.error(`[Gateway] Failed to kill pid ${ext.pid}:`, err);
         }
@@ -752,8 +755,7 @@ function handleCommand(parsed: Command, meta: CommandMeta) {
       const projectDir = createUniqueProjectDir(workspace, projectName);
       // Initialize git repo so worktrees can be created for each dev agent
       try {
-        execSync("git init", { cwd: projectDir, stdio: "pipe" });
-        execSync("git -c user.name=PixelCrew -c user.email=bot@pixel-crew.local commit --allow-empty -m 'init'", { cwd: projectDir, stdio: "pipe" });
+        initProjectRepo(projectDir);
         console.log(`[Gateway] Initialized git repo in ${projectDir}`);
       } catch (err) {
         console.error(`[Gateway] Failed to init git: ${(err as Error).message}`);
@@ -835,7 +837,7 @@ function handleCommand(parsed: Command, meta: CommandMeta) {
           type: "AGENT_CREATED",
           agentId: ext.agentId,
           name: ext.name,
-          role: ext.cwd ? ext.cwd.split("/").pop() ?? ext.backendId : ext.backendId,
+          role: ext.cwd ? path.basename(ext.cwd) || ext.backendId : ext.backendId,
           isExternal: true,
           palette: ext.pid % 6,
           pid: ext.pid,
@@ -1591,7 +1593,7 @@ async function main() {
             type: "AGENT_CREATED",
             agentId: agent.agentId,
             name: displayName,
-            role: agent.cwd ? agent.cwd.split("/").pop() ?? agent.backendId : agent.backendId,
+            role: agent.cwd ? path.basename(agent.cwd) || agent.backendId : agent.backendId,
             isExternal: true,
             palette: agent.pid % 6,
             pid: agent.pid,
@@ -1695,7 +1697,7 @@ async function main() {
   if (process.env.NODE_ENV !== "development" && !process.env.NO_OPEN && existsSync(config.webDir)) {
     const url = `http://localhost:${config.wsPort}`;
     console.log(`[Gateway] Opening ${url}`);
-    execFile("open", [url]);
+    openExternal(url);
   }
 
   // Listen for stdin commands

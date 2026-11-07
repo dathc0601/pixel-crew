@@ -112,8 +112,8 @@ function buildTunnelPreviewLink(result: any): string {
   }
 
   // 2. Static file preview — previewPath or HTML entryFile
-  const fileName = result.previewPath?.split("/").pop()
-    ?? (result.entryFile && /\.html?$/i.test(result.entryFile) ? result.entryFile.split("/").pop() : null);
+  const fileName = result.previewPath?.split(/[\\/]/).pop()
+    ?? (result.entryFile && /\.html?$/i.test(result.entryFile) ? result.entryFile.split(/[\\/]/).pop() : null);
   if (fileName) return `${base}/preview-static/${fileName}`;
 
   // 3. Command preview with port

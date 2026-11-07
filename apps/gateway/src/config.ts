@@ -1,8 +1,8 @@
 import "dotenv/config";
-import { resolve, dirname } from "path";
+import { resolve, dirname, parse as parsePath } from "path";
 import { fileURLToPath } from "url";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
 import { randomBytes } from "crypto";
 import { migrateLegacyDataDir } from "./data-dir.js";
 import { OfficeConfigManager } from "./office-config.js";
@@ -108,11 +108,11 @@ function resolveWebDir(): string {
 
 function ensureGitRepo(dir: string) {
   try {
-    execSync("git rev-parse --is-inside-work-tree", { cwd: dir, stdio: "ignore", timeout: 3000 });
+    execFileSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: dir, stdio: "ignore", timeout: 3000, windowsHide: true });
   } catch {
     try {
-      execSync("git init", { cwd: dir, stdio: "pipe", timeout: 3000 });
-      execSync('git -c user.name=PixelCrew -c user.email=bot@pixel-crew.local commit --allow-empty -m init', { cwd: dir, stdio: "pipe", timeout: 3000 });
+      execFileSync("git", ["init"], { cwd: dir, stdio: "pipe", timeout: 3000, windowsHide: true });
+      execFileSync("git", ["-c", "user.name=PixelCrew", "-c", "user.email=bot@pixel-crew.local", "commit", "--allow-empty", "-m", "init"], { cwd: dir, stdio: "pipe", timeout: 3000, windowsHide: true });
       console.log(`[Config] Initialized git repo in ${dir}`);
     } catch { /* ignore */ }
   }
@@ -133,7 +133,7 @@ function resolveDefaultWorkspace(): string {
   // Published mode: use the directory where the user ran the command
   // Tauri sidecar runs with cwd="/", fall back to ~/.pixel-crew/projects/
   const cwd = process.cwd();
-  if (cwd === "/" || cwd === "C:\\") {
+  if (cwd === parsePath(cwd).root) {
     const ws = resolve(CONFIG_DIR, "projects");
     if (!existsSync(ws)) {
       mkdirSync(ws, { recursive: true });

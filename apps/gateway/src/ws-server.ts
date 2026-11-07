@@ -22,6 +22,7 @@ import {
   normalizeOrigin,
   safeEqual,
   isTunnelRequest,
+  isPathInside,
 } from "./security.js";
 
 let wss: WebSocketServer | null = null;
@@ -624,9 +625,8 @@ async function handlePreviewRequest(req: IncomingMessage, res: ServerResponse): 
     }
     const reqPath = decodeURIComponent((staticMatch[1] || "/").split("?")[0]);
     const filePath = resolve(root, reqPath === "/" ? (entry ?? "index.html") : reqPath.slice(1));
-    // Security: prevent path traversal outside root (trailing sep avoids sibling-prefix bypass)
-    const rootWithSep = resolve(root) + "/";
-    if (filePath !== resolve(root) && !filePath.startsWith(rootWithSep)) {
+    // Security: prevent path traversal outside root (path.relative: works with Windows separators too)
+    if (!isPathInside(root, filePath)) {
       res.writeHead(403, previewHeaders({ "Content-Type": "text/plain" }));
       res.end("Forbidden");
       return;
@@ -756,9 +756,7 @@ async function serveStatic(req: IncomingMessage, res: ServerResponse) {
   }
 
   // Security: prevent path traversal outside webDir
-  const webRoot = resolve(config.webDir);
-  const resolvedPath = resolve(filePath);
-  if (resolvedPath !== webRoot && !resolvedPath.startsWith(webRoot + "/")) {
+  if (!isPathInside(config.webDir, filePath)) {
     res.writeHead(403, { "Content-Type": "text/plain" });
     res.end("Forbidden");
     return;
