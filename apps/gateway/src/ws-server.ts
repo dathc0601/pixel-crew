@@ -1,65 +1,102 @@
-import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from "http";
+import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { CommandSchema } from "@pixel-crew/shared";
 import type { GatewayEvent, Command, UserRole } from "@pixel-crew/shared";
 import { config } from "./config.js";
 import { previewServer } from "@pixel-crew/orchestrator";
-import { networkInterfaces, homedir } from "os";
+import { networkInterfaces } from "os";
 import { readFile, stat } from "fs/promises";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join, extname, resolve } from "path";
 import * as Ably from "ably";
 import type { Channel, CommandMeta } from "./transport.js";
 import { writePortLock } from "./runtime-state.js";
 import { nanoid } from "nanoid";
-
-/**
- * Detect requests arriving through Cloudflare Tunnel.
- * Cloudflare injects CF-Connecting-IP on every proxied request.
- */
-function isTunnelRequest(req: IncomingMessage): boolean {
-  return !!(req.headers["cf-connecting-ip"] || req.headers["cf-ray"]);
-}
+import {
+  RateLimiter,
+  SessionTokenStore,
+  buildTrustedOrigins,
+  checkQuickConnect,
+  checkWebSocketOrigin,
+  clientKey,
+  normalizeOrigin,
+  safeEqual,
+} from "./security.js";
 
 let wss: WebSocketServer | null = null;
-const clients = new Map<WebSocket, { role: UserRole; clientId: string }>();
+let httpServer: Server | null = null;
+const clients = new Map<WebSocket, { role: UserRole; clientId: string; sessionToken: string }>();
 let pairCode: string | null = null;
 let onCommand: ((cmd: Command, meta: CommandMeta) => void) | null = null;
 
 // In-memory share token store: token → { role } (for public share links)
 const shareTokens = new Map<string, { role: "collaborator" | "spectator" }>();
 
-// Session tokens — persisted to disk so they survive gateway restarts
-// Instance-scoped to prevent cross-instance auth token leakage
-function getSessionTokensFile(): string { return resolve(config.instanceDir, "session-tokens.json"); }
-
-function loadSessionTokens(): Map<string, UserRole> {
-  try {
-    const f = getSessionTokensFile();
-    if (existsSync(f)) {
-      const data = JSON.parse(readFileSync(f, "utf-8"));
-      return new Map(Object.entries(data) as [string, UserRole][]);
-    }
-  } catch { /* corrupt file, start fresh */ }
-  return new Map();
+// Session tokens: persisted (instance-scoped) with an expiry so they survive restarts but not forever
+let sessionStore: SessionTokenStore | null = null;
+function getSessionStore(): SessionTokenStore {
+  if (!sessionStore) {
+    sessionStore = new SessionTokenStore(resolve(config.instanceDir, "session-tokens.json"), { ttlMs: config.sessionTtlMs });
+  }
+  return sessionStore;
 }
 
-function persistSessionTokens() {
-  const dir = resolve(config.instanceDir);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(getSessionTokensFile(), JSON.stringify(Object.fromEntries(sessionTokens)), "utf-8");
-}
-
-const sessionTokens = loadSessionTokens();
-
-function addSessionToken(token: string, role: UserRole) {
-  sessionTokens.set(token, role);
-  persistSessionTokens();
-}
+// Brute-force protection for code/token validation: 5 attempts per minute per client, then 5 min lockout
+const authLimiter = new RateLimiter({ max: 5, windowMs: 60_000, lockoutMs: 5 * 60_000 });
+const MAX_BODY_BYTES = 16 * 1024;
 
 // Pending WS connections awaiting AUTH
 const pendingAuth = new Set<WebSocket>();
 const AUTH_TIMEOUT_MS = 5000;
+
+function trustedOrigins(): Set<string> {
+  const devPorts = [3000, 3002];
+  if (process.env.NEXT_DEV_PORT) devPorts.push(Number(process.env.NEXT_DEV_PORT));
+  return buildTrustedOrigins({ port: config.wsPort, isDev: config.isDev, devPorts, extra: config.allowedOrigins });
+}
+
+function sendJson(res: ServerResponse, status: number, body: unknown, extraHeaders: Record<string, string> = {}) {
+  res.writeHead(status, { "Content-Type": "application/json", ...extraHeaders });
+  res.end(JSON.stringify(body));
+}
+
+/** Read a small JSON body (capped). Resolves null on oversize or bad JSON. */
+function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown> | null> {
+  return new Promise((resolveBody) => {
+    let size = 0;
+    const chunks: Buffer[] = [];
+    let aborted = false;
+    req.on("data", (c: Buffer) => {
+      if (aborted) return;
+      size += c.length;
+      if (size > MAX_BODY_BYTES) { aborted = true; resolveBody(null); return; }
+      chunks.push(c);
+    });
+    req.on("end", () => {
+      if (aborted) return;
+      try {
+        const parsed = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+        resolveBody(parsed && typeof parsed === "object" ? parsed : null);
+      } catch {
+        resolveBody(null);
+      }
+    });
+    req.on("error", () => { if (!aborted) resolveBody(null); });
+  });
+}
+
+/** Apply the rate limit; writes a 429 and returns false when the client is locked out. */
+function rateLimitOk(req: IncomingMessage, res: ServerResponse, bucket: string): boolean {
+  const verdict = authLimiter.hit(`${bucket}:${clientKey(req)}`);
+  if (verdict.allowed) return true;
+  const retryAfter = Math.ceil(verdict.retryAfterMs / 1000);
+  console.log(`[Auth] Rate limited ${bucket} from ${clientKey(req)} (retry in ${retryAfter}s)`);
+  sendJson(res, 429, { error: "Too many attempts. Try again later." }, { "Retry-After": String(retryAfter) });
+  return false;
+}
+
+function pairCodeMatches(code: unknown): boolean {
+  return typeof code === "string" && !!pairCode && safeEqual(code.trim().toUpperCase(), pairCode);
+}
 
 const MIME_TYPES: Record<string, string> = {
   ".html": "text/html",
@@ -81,7 +118,7 @@ const MIME_TYPES: Record<string, string> = {
 };
 
 export function setPairCode(code: string) {
-  pairCode = code;
+  pairCode = code.toUpperCase();
 }
 
 /** Send an event to a specific client by clientId (unicast) */
@@ -95,6 +132,35 @@ export function sendToClient(clientId: string, event: GatewayEvent) {
   }
 }
 
+/**
+ * Revoke all session tokens and disconnect their clients.
+ * `exceptClientId` keeps the requesting client's session alive.
+ * Returns the number of revoked tokens.
+ */
+export function revokeAllSessions(opts: { exceptClientId?: string } = {}): number {
+  const keep: string[] = [];
+  for (const [, info] of clients) {
+    if (opts.exceptClientId && info.clientId === opts.exceptClientId) keep.push(info.sessionToken);
+  }
+  const revoked = getSessionStore().revokeAll(keep);
+  shareTokens.clear();
+  for (const [ws, info] of clients) {
+    if (keep.includes(info.sessionToken)) continue;
+    try { ws.send(JSON.stringify({ type: "AUTH_FAILED" })); } catch { /* closing anyway */ }
+    ws.close(4001, "Session revoked");
+    clients.delete(ws);
+  }
+  console.log(`[Auth] Revoked ${revoked} session token(s)`);
+  return revoked;
+}
+
+/** Address the HTTP server is bound to (tests, logging). */
+export function getListeningAddress(): { host: string; port: number } | null {
+  const addr = httpServer?.address();
+  if (!addr || typeof addr === "string") return null;
+  return { host: addr.address, port: addr.port };
+}
+
 export const wsChannel: Channel = {
   name: "WebSocket",
 
@@ -103,118 +169,85 @@ export const wsChannel: Channel = {
 
     return new Promise((promiseResolve) => {
       const requestHandler = async (req: IncomingMessage, res: ServerResponse) => {
-        // CORS headers
-        res.setHeader("Access-Control-Allow-Origin", "*");
-        res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-        res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+        // CORS: allowlist only (never "*"). Same-origin pages need no CORS headers.
+        const origin = req.headers.origin;
+        const normOrigin = normalizeOrigin(origin);
+        const originTrusted = !!normOrigin && trustedOrigins().has(normOrigin);
+        if (originTrusted) {
+          res.setHeader("Access-Control-Allow-Origin", normOrigin!);
+          res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+          res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+        }
+        res.setHeader("Vary", "Origin");
 
         if (req.method === "OPTIONS") {
-          res.writeHead(204);
+          res.writeHead(originTrusted ? 204 : 403);
           res.end();
           return;
         }
 
-        // Quick connect — local-only, never exposed through tunnel
-        if (req.method === "GET" && req.url === "/connect") {
-          if (config.ablyApiKey || isTunnelRequest(req)) {
-            res.writeHead(403, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "Quick connect disabled" }));
+        // Quick connect: owner token without a pair code — local UI only
+        if (req.method === "GET" && (req.url === "/connect" || req.url?.startsWith("/connect?"))) {
+          const verdict = checkQuickConnect(req, { trustedOrigins: trustedOrigins(), ablyConfigured: !!config.ablyApiKey });
+          if (!verdict.ok) {
+            console.log(`[Auth] /connect refused (${verdict.reason}) remote=${req.socket.remoteAddress} host=${req.headers.host} origin=${origin ?? "-"}`);
+            sendJson(res, verdict.status, { error: verdict.reason });
             return;
           }
-          const sessionToken = nanoid();
-          addSessionToken(sessionToken, "owner");
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({
+          const sessionToken = getSessionStore().issue("owner");
+          sendJson(res, 200, {
             machineId: config.machineId,
             gatewayId: config.gatewayId,
             wsUrl: `ws://localhost:${config.wsPort}`,
             role: "owner",
             sessionToken,
-          }));
+          });
           return;
         }
 
         if (req.method === "POST" && req.url === "/pair/validate") {
-          let body = "";
-          req.on("data", (chunk) => (body += chunk));
-          req.on("end", () => {
-            try {
-              const { code } = JSON.parse(body);
-              if (!pairCode || code !== pairCode) {
-                res.writeHead(401, { "Content-Type": "application/json" });
-                res.end(JSON.stringify({ error: "Invalid pair code" }));
-                return;
-              }
-              const sessionToken = nanoid();
-              addSessionToken(sessionToken, "owner");
-              res.writeHead(200, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({
-                machineId: config.machineId,
-                wsUrl: `ws://localhost:${config.wsPort}`,
-                hasAbly: !!config.ablyApiKey,
-                role: "owner",
-                sessionToken,
-              }));
-            } catch {
-              res.writeHead(400, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({ error: "Bad request" }));
-            }
+          if (!rateLimitOk(req, res, "pair")) return;
+          const body = await readJsonBody(req);
+          if (!body) { sendJson(res, 400, { error: "Bad request" }); return; }
+          if (!pairCodeMatches(body.code)) { sendJson(res, 401, { error: "Invalid pair code" }); return; }
+          const sessionToken = getSessionStore().issue("owner");
+          sendJson(res, 200, {
+            machineId: config.machineId,
+            wsUrl: `ws://localhost:${config.wsPort}`,
+            hasAbly: !!config.ablyApiKey,
+            role: "owner",
+            sessionToken,
           });
           return;
         }
 
-        // Share link creation (owner-only)
+        // Share link creation (owner-only: proves ownership with the pair code)
         if (req.method === "POST" && req.url === "/share/create") {
-          let body = "";
-          req.on("data", (chunk) => (body += chunk));
-          req.on("end", () => {
-            try {
-              const { code, role } = JSON.parse(body);
-              if (!pairCode || code !== pairCode) {
-                res.writeHead(401, { "Content-Type": "application/json" });
-                res.end(JSON.stringify({ error: "Invalid pair code" }));
-                return;
-              }
-              const shareRole = role === "collaborator" ? "collaborator" : "spectator";
-              const token = nanoid();
-              shareTokens.set(token, { role: shareRole });
-              res.writeHead(200, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({ token, role: shareRole }));
-            } catch {
-              res.writeHead(400, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({ error: "Bad request" }));
-            }
-          });
+          if (!rateLimitOk(req, res, "share-create")) return;
+          const body = await readJsonBody(req);
+          if (!body) { sendJson(res, 400, { error: "Bad request" }); return; }
+          if (!pairCodeMatches(body.code)) { sendJson(res, 401, { error: "Invalid pair code" }); return; }
+          const shareRole = body.role === "collaborator" ? "collaborator" : "spectator";
+          const token = nanoid();
+          shareTokens.set(token, { role: shareRole });
+          sendJson(res, 200, { token, role: shareRole });
           return;
         }
 
         // Share link validation (public users)
         if (req.method === "POST" && req.url === "/share/validate") {
-          let body = "";
-          req.on("data", (chunk) => (body += chunk));
-          req.on("end", () => {
-            try {
-              const { token } = JSON.parse(body);
-              const share = shareTokens.get(token);
-              if (!share) {
-                res.writeHead(401, { "Content-Type": "application/json" });
-                res.end(JSON.stringify({ error: "Invalid share token" }));
-                return;
-              }
-              const sessionToken = nanoid();
-              addSessionToken(sessionToken, share.role);
-              res.writeHead(200, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({
-                machineId: config.machineId,
-                wsUrl: `ws://localhost:${config.wsPort}`,
-                hasAbly: !!config.ablyApiKey,
-                role: share.role,
-                sessionToken,
-              }));
-            } catch {
-              res.writeHead(400, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({ error: "Bad request" }));
-            }
+          if (!rateLimitOk(req, res, "share")) return;
+          const body = await readJsonBody(req);
+          if (!body) { sendJson(res, 400, { error: "Bad request" }); return; }
+          const share = typeof body.token === "string" ? shareTokens.get(body.token) : undefined;
+          if (!share) { sendJson(res, 401, { error: "Invalid share token" }); return; }
+          const sessionToken = getSessionStore().issue(share.role);
+          sendJson(res, 200, {
+            machineId: config.machineId,
+            wsUrl: `ws://localhost:${config.wsPort}`,
+            hasAbly: !!config.ablyApiKey,
+            role: share.role,
+            sessionToken,
           });
           return;
         }
@@ -247,7 +280,7 @@ export const wsChannel: Channel = {
                 res.end(JSON.stringify({ error: "Session token required" }));
                 return;
               }
-              const clientRole = sessionTokens.get(sessionToken);
+              const clientRole = getSessionStore().validate(sessionToken);
               if (!clientRole) {
                 res.writeHead(401, { "Content-Type": "application/json" });
                 res.end(JSON.stringify({ error: "Invalid session token" }));
@@ -407,15 +440,25 @@ export const wsChannel: Channel = {
       let port = config.wsPort;
 
       const tryListen = () => {
-        const httpServer = createServer(requestHandler);
-        httpServer.listen(port, () => {
+        const server = createServer(requestHandler);
+        server.listen(port, config.listenHost, () => {
+          httpServer = server;
           // When port=0, OS assigns a random port — read the actual value
-          const actualPort = (httpServer.address() as any)?.port ?? port;
+          const actualPort = (server.address() as any)?.port ?? port;
           port = actualPort;
           config.wsPort = actualPort;
 
-          // Attach WebSocket server only after successful listen
-          wss = new WebSocketServer({ server: httpServer });
+          // Attach WebSocket server only after successful listen.
+          // Browsers always send Origin on WebSocket upgrades; reject foreign pages.
+          wss = new WebSocketServer({
+            server,
+            verifyClient: (info: { origin: string; req: IncomingMessage }, cb: (ok: boolean, code?: number, message?: string) => void) => {
+              const verdict = checkWebSocketOrigin(info.req.headers.origin, info.req.headers.host, trustedOrigins());
+              if (verdict.ok) return cb(true);
+              console.log(`[WS] Upgrade rejected: ${verdict.reason} (origin=${info.req.headers.origin}, host=${info.req.headers.host})`);
+              cb(false, verdict.status, verdict.reason);
+            },
+          });
           wss.on("connection", (ws) => {
             pendingAuth.add(ws);
             console.log(`[WS] Client connected, awaiting AUTH...`);
@@ -437,10 +480,10 @@ export const wsChannel: Channel = {
                 if (pendingAuth.has(ws)) {
                   if (msg.type === "AUTH") {
                     if (msg.sessionToken) {
-                      const role = sessionTokens.get(msg.sessionToken);
+                      const role = getSessionStore().validate(msg.sessionToken);
                       if (role) {
                         const clientId = nanoid(8);
-                        clients.set(ws, { role, clientId });
+                        clients.set(ws, { role, clientId, sessionToken: msg.sessionToken });
                         pendingAuth.delete(ws);
                         clearTimeout(authTimer);
                         console.log(`[WS] Client authenticated as ${role} (total: ${clients.size})`);
@@ -482,9 +525,13 @@ export const wsChannel: Channel = {
             });
           });
 
-          console.log(`[WS] Server listening on port ${port}`);
+          console.log(`[WS] Server listening on ${config.listenHost}:${port}`);
           writePortLock(port);
-          printLanAddresses();
+          if (config.listenHost === "127.0.0.1") {
+            console.log(`[WS] Loopback only. Start with --lan to let phones on your network pair.`);
+          } else {
+            printLanAddresses();
+          }
 
           // Signal for Tauri sidecar — Rust parses this to emit port to webview
           console.log(`GATEWAY_READY ${JSON.stringify({ port, gatewayId: config.gatewayId })}`);
@@ -492,7 +539,7 @@ export const wsChannel: Channel = {
           promiseResolve(true);
         });
 
-        httpServer.once("error", (err: NodeJS.ErrnoException) => {
+        server.once("error", (err: NodeJS.ErrnoException) => {
           if (err.code === "EADDRINUSE" && port - config.wsPort < maxRetries) {
             const oldPort = port;
             port++;
@@ -523,8 +570,13 @@ export const wsChannel: Channel = {
       ws.close();
     }
     clients.clear();
+    for (const ws of pendingAuth) ws.terminate();
+    pendingAuth.clear();
     wss?.close();
     wss = null;
+    httpServer?.close();
+    httpServer?.closeAllConnections?.();
+    httpServer = null;
   },
 };
 

@@ -1,5 +1,6 @@
 import { registerChannel, initTransports, publishEvent, destroyTransports, reinitChannel, isChannelActive } from "./transport.js";
-import { wsChannel, setPairCode, sendToClient } from "./ws-server.js";
+import { wsChannel, setPairCode, sendToClient, revokeAllSessions } from "./ws-server.js";
+import { generatePairCode } from "./security.js";
 import { ablyChannel } from "./ably-client.js";
 import { telegramChannel, setTelegramAgentDefs, syncTelegramHiredAgents } from "./telegram-channel.js";
 import { config, CONFIG_DIR, hasSetupRun, reloadConfig, saveConfig } from "./config.js";
@@ -71,16 +72,12 @@ function persistTeamState() {
   saveTeamState({ agents, team });
 }
 
-function generatePairCode(): string {
-  return nanoid(6).toUpperCase();
-}
-
 function showPairCode() {
   const code = generatePairCode();
   setPairCode(code);
   console.log("");
   console.log("╔══════════════════════════════════╗");
-  console.log("║     PAIR CODE: " + code + "           ║");
+  console.log("║     PAIR CODE: " + code + "         ║");
   console.log("╚══════════════════════════════════╝");
   console.log("");
   console.log(`Open your phone → enter gateway address + code`);
@@ -1200,6 +1197,12 @@ function handleCommand(parsed: Command, meta: CommandMeta) {
       }
       break;
     }
+    case "REVOKE_SESSIONS": {
+      // Owner-only (RBAC above). Keeps the caller connected so they can see the result.
+      const revoked = revokeAllSessions({ exceptClientId: meta.clientId });
+      sendToClient(meta.clientId, { type: "SESSIONS_REVOKED", revoked });
+      break;
+    }
     case "TOGGLE_AUTO_MERGE": {
       console.log(`[Gateway] Toggle autoMerge for agent ${parsed.agentId}: ${parsed.autoMerge}`);
       orc.setAgentAutoMerge(parsed.agentId, parsed.autoMerge);
@@ -1526,7 +1529,7 @@ async function main() {
   startTunnel();
 
   console.log("[Gateway] Listening for commands...");
-  console.log("[Gateway] Press 'p' + Enter to generate a new pair code");
+  console.log("[Gateway] Press 'p' + Enter to generate a new pair code, 'r' + Enter to revoke all sessions");
 
   // Auto-open browser only in production mode (pnpm start, not dev), skip when embedded as sidecar
   if (process.env.NODE_ENV !== "development" && !process.env.NO_OPEN && existsSync(config.webDir)) {
@@ -1542,6 +1545,10 @@ async function main() {
       const cmd = data.trim().toLowerCase();
       if (cmd === "p") {
         showPairCode();
+      } else if (cmd === "r") {
+        const revoked = revokeAllSessions();
+        showPairCode();
+        console.log(`[Gateway] Revoked ${revoked} session(s); all devices must pair again.`);
       }
     });
   }

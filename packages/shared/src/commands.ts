@@ -224,6 +224,11 @@ export const LoadChatHistoryCommand = z.object({
   type: z.literal("LOAD_CHAT_HISTORY"),
 });
 
+/** Owner-only: revoke every session token (except the caller's) and disconnect those clients. */
+export const RevokeSessionsCommand = z.object({
+  type: z.literal("REVOKE_SESSIONS"),
+});
+
 export const CommandSchema = z.discriminatedUnion("type", [
   RunTaskCommand,
   ApprovalDecisionCommand,
@@ -259,6 +264,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
   DeleteSkillCommand,
   SyncChatHistoryCommand,
   LoadChatHistoryCommand,
+  RevokeSessionsCommand,
 ]);
 
 export type RunTaskCommand = z.infer<typeof RunTaskCommand>;
@@ -293,4 +299,5 @@ export type SaveConfigCommand = z.infer<typeof SaveConfigCommand>;
 export type ListSkillsCommand = z.infer<typeof ListSkillsCommand>;
 export type SaveSkillCommand = z.infer<typeof SaveSkillCommand>;
 export type DeleteSkillCommand = z.infer<typeof DeleteSkillCommand>;
+export type RevokeSessionsCommand = z.infer<typeof RevokeSessionsCommand>;
 export type Command = z.infer<typeof CommandSchema>;

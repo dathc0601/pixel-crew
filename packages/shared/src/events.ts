@@ -302,6 +302,11 @@ export const ChatHistoryLoadedEvent = z.object({
   data: z.string(),
 });
 
+export const SessionsRevokedEvent = z.object({
+  type: z.literal("SESSIONS_REVOKED"),
+  revoked: z.number(),
+});
+
 export const GatewayEventSchema = z.discriminatedUnion("type", [
   AgentsSyncEvent,
   AgentStatusEvent,
@@ -335,6 +340,7 @@ export const GatewayEventSchema = z.discriminatedUnion("type", [
   AutoMergeUpdatedEvent,
   SkillListEvent,
   ChatHistoryLoadedEvent,
+  SessionsRevokedEvent,
 ]);
 
 export type TokenUsage = z.infer<typeof TokenUsage>;
@@ -370,4 +376,5 @@ export type WorktreeMergedEvent = z.infer<typeof WorktreeMergedEvent>;
 export type WorktreeRevertedEvent = z.infer<typeof WorktreeRevertedEvent>;
 export type AutoMergeUpdatedEvent = z.infer<typeof AutoMergeUpdatedEvent>;
 export type SkillListEvent = z.infer<typeof SkillListEvent>;
+export type SessionsRevokedEvent = z.infer<typeof SessionsRevokedEvent>;
 export type GatewayEvent = z.infer<typeof GatewayEventSchema>;

@@ -265,7 +265,7 @@ export default function PairPage() {
               value={code}
               onChange={(e) => setCode(e.target.value.toUpperCase())}
               placeholder="PAIR CODE"
-              maxLength={6}
+              maxLength={8}
               style={{
                 fontSize: 32, textAlign: "center", letterSpacing: 8,
                 padding: "12px 16px", borderRadius: 8, border: "2px solid #444",

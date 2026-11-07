@@ -37,6 +37,12 @@ interface SavedConfig {
   autoMergeEnabled?: boolean;
   tunnelBaseUrl?: string;
   tunnelToken?: string;
+  /** Listen on all interfaces so phones on the LAN can pair (default: loopback only) */
+  lan?: boolean;
+  /** Extra origins allowed to call the gateway cross-origin (CORS / WebSocket) */
+  allowedOrigins?: string[];
+  /** Session token lifetime in ms (default 7 days) */
+  sessionTtlMs?: number;
 }
 
 function ensureConfigDir() {
@@ -171,6 +177,13 @@ function buildConfig() {
       return resolveDefaultWorkspace();
     })(),
     wsPort: Number(process.env.WS_PORT) || (isDev ? 9099 : 9090),
+    /** Loopback by default; LAN only with --lan, PIXEL_CREW_LAN=1 or "lan": true in config.json */
+    listenHost: (process.argv.includes("--lan") || process.env.PIXEL_CREW_LAN === "1" || saved.lan === true)
+      ? "0.0.0.0"
+      : "127.0.0.1",
+    allowedOrigins: Array.isArray(saved.allowedOrigins) ? saved.allowedOrigins.filter((o): o is string => typeof o === "string") : [],
+    sessionTtlMs: typeof saved.sessionTtlMs === "number" && saved.sessionTtlMs > 0 ? saved.sessionTtlMs : 7 * 24 * 60 * 60 * 1000,
+    isDev,
     ablyApiKey: process.env.ABLY_API_KEY || saved.ablyApiKey || undefined,
     webDir: resolveWebDir(),
     telegramBotToken:
