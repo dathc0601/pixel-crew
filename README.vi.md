@@ -84,6 +84,10 @@ Chế độ demo không bao giờ khởi động AI CLI và không bao giờ t�
 
 Các agent làm việc trong thư mục bạn chọn cho project. Thư mục mặc định của gateway là thư mục nơi bạn khởi động nó; biến môi trường `WORKSPACE=/path/to/repo` dùng để đổi thư mục này.
 
+**Lệnh `pixel-crew` khi chạy từ source.** Pixel Crew chưa lên npm, nên lệnh `pixel-crew` chưa có trong `PATH`. Lệnh này cần cho `pixel-crew claude-attachable`, xem [docs/attach-sessions.md](docs/attach-sessions.md). Sau khi `pnpm start` đã build gateway ít nhất một lần, bạn có hai cách:
+- chạy `node apps/gateway/dist/index.js <lệnh con>` ngay trong thư mục repo;
+- hoặc link file đã build vào một thư mục có trong `PATH`, ví dụ trên macOS/Linux: `ln -s "$PWD/apps/gateway/dist/index.js" "$(npm prefix -g)/bin/pixel-crew"`.
+
 **Ứng dụng desktop**: bộ cài chưa ký cho macOS, Windows và Linux được đính kèm trong mỗi [release](https://github.com/dathc0601/pixel-crew/releases). Xem [docs/desktop.md](docs/desktop.md).
 
 **Để phát triển**: `pnpm dev` (gateway ở :9099 + web dev server có hot reload) hoặc `pnpm dev:demo`.
