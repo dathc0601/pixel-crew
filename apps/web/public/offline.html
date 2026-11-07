@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0a0a0b">
+<title>Gateway offline · Pixel Crew</title>
+<link rel="icon" href="data:,">
+<!-- Served by the service worker when a page load fails because the gateway is not
+     running. Self-contained (no scripts or styles from elsewhere): it is precached. -->
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    padding: 16px; background: #0c0a08; color: #c4b894;
+    font: 14px/1.6 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  }
+  main { max-width: 460px; width: 100%; border: 1px solid #2c2618; background: #100e0a; padding: 24px; }
+  h1 { margin: 0 0 12px; font-size: 16px; color: #c85a4a; letter-spacing: 0.04em; }
+  p { margin: 0 0 12px; }
+  code { color: #e8b040; background: #181410; padding: 2px 6px; }
+  .status { color: #6a5c40; font-size: 12px; }
+  button {
+    font: inherit; color: #0c0a08; background: #e8b040; border: 0; padding: 6px 14px; cursor: pointer;
+    min-height: 32px;
+  }
+  button:focus-visible { outline: 2px solid #e0d8c4; outline-offset: 2px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Gateway offline</h1>
+  <p>Pixel Crew can't reach its gateway. Start it in a terminal from the project folder:</p>
+  <p><code>pnpm start</code></p>
+  <p>or, if you installed it from npm, run <code>pixel-crew</code>.</p>
+  <p class="status" id="status" role="status" aria-live="polite">Checking again shortly…</p>
+  <button type="button" id="retry">Retry now</button>
+</main>
+<script>
+(function () {
+  var delay = 2000, timer = null, busy = false;
+  var statusEl = document.getElementById("status");
+  function schedule() {
+    clearTimeout(timer);
+    statusEl.textContent = "Checking again in " + Math.round(delay / 1000) + "s…";
+    timer = setTimeout(check, delay);
+    delay = Math.min(delay * 1.5, 10000);
+  }
+  function check() {
+    if (busy) return;
+    busy = true;
+    statusEl.textContent = "Checking…";
+    // HEAD is not routed by the service worker, so this always reaches the network
+    fetch(location.pathname, { method: "HEAD", cache: "no-store" })
+      .then(function (res) {
+        if (res.ok) { statusEl.textContent = "Gateway is back. Reloading…"; location.reload(); return; }
+        busy = false; schedule();
+      })
+      .catch(function () { busy = false; schedule(); });
+  }
+  function now() { delay = 2000; clearTimeout(timer); check(); }
+  document.getElementById("retry").addEventListener("click", now);
+  window.addEventListener("online", now);
+  window.addEventListener("focus", now);
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) now(); });
+  schedule();
+})();
+</script>
+</body>
+</html>

@@ -1,13 +1,45 @@
 import type { NextConfig } from "next";
-import withPWAInit from "@ducanh2912/next-pwa";
+import withPWAInit, { runtimeCaching as defaultRuntimeCaching } from "@ducanh2912/next-pwa";
 import path from "path";
 import { readFileSync } from "fs";
+
+// Workbox serializes runtime-caching plugins into sw.js with Function#toString, after
+// Next has transpiled this file (and next-pwa) with SWC. next-pwa's own plugins are
+// `async` functions, which come out calling `_async_to_generator`, a helper sw.js does
+// not define: every call threw a ReferenceError (an uncaught rejection in the worker,
+// and a network error page instead of the fallback). So these hooks are plain
+// functions returning promises, and next-pwa skips its own when a route has one.
+type SwGlobal = { fallback?: (req: Request) => Promise<Response | undefined> };
+
+/** Failed fetch → precached fallback (offline.html for documents), else a plain network error. Never rejects. */
+const offlineFallback = {
+  handlerDidError: function (param: { request: Request }) {
+    const sw = globalThis as unknown as SwGlobal;
+    if (!sw.fallback) return Promise.resolve(Response.error());
+    return sw.fallback(param.request).then(
+      function (res) { return res || Response.error(); },
+      function () { return Response.error(); },
+    );
+  },
+};
+
+type CacheEntry = (typeof defaultRuntimeCaching)[number];
+const withFallback = (entry: CacheEntry): CacheEntry =>
+  entry.options
+    ? { ...entry, options: { ...entry.options, plugins: [...(entry.options.plugins ?? []), offlineFallback] } }
+    : entry;
 
 const withPWA = withPWAInit({
   dest: "public",
   disable: process.env.NODE_ENV === "development",
   navigateFallbackDenylist: [/^\/preview-static/, /^\/preview-app/],
-  extendDefaultRuntimeCaching: true,
+  // The "start-url" route next-pwa adds carries an async plugin (see above); "/" is
+  // covered by the navigation route below instead.
+  dynamicStartUrl: false,
+  // Precached static page served when a navigation fails (gateway stopped or restarting)
+  fallbacks: { document: "/offline.html" },
+  // The defaults are listed below with the fallback hook added
+  extendDefaultRuntimeCaching: false,
   workboxOptions: {
     runtimeCaching: [
       {
@@ -16,6 +48,14 @@ const withPWA = withPWAInit({
           /^\/(preview-static|preview-app)(\/.*)?$/.test(url.pathname),
         handler: "NetworkOnly",
       },
+      {
+        // App pages need a live gateway: never serve a stale cached page, show
+        // offline.html instead until the gateway answers again
+        urlPattern: ({ request }: { request: Request }) => request.mode === "navigate",
+        handler: "NetworkOnly",
+        options: { cacheName: "navigations", plugins: [offlineFallback] },
+      },
+      ...defaultRuntimeCaching.map(withFallback),
     ],
   },
 });

@@ -25,6 +25,7 @@ node_modules/
 /.next/
 apps/gateway/dist/
 apps/web/public/workbox-*.js
+apps/web/public/fallback-*.js
 apps/web/public/workbox-*.js.map
 apps/web/public/swe-worker-*.js
 *.tsbuildinfo
