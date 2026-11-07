@@ -2,7 +2,7 @@
 
 The office view uses a pluggable `SceneAdapter` interface. You can swap the pixel-art canvas for any rendering approach (3D, isometric, list view, etc.) by implementing 2 things:
 
-1. A **SceneAdapter** class (6 methods)
+1. A **SceneAdapter** class (8 required methods, a few optional ones)
 2. A **React component** that creates the adapter
 
 ---
@@ -11,7 +11,7 @@ The office view uses a pluggable `SceneAdapter` interface. You can swap the pixe
 
 ```typescript
 // scene/MySceneAdapter.ts
-import type { SceneAdapter, AgentInfo, BubbleType } from "./SceneAdapter";
+import type { SceneAdapter, AgentInfo, BubbleType, BossInfo, HandoffOptions } from "./SceneAdapter";
 import type { AgentStatus } from "@pixel-crew/shared";
 
 export class MySceneAdapter implements SceneAdapter {
@@ -40,6 +40,18 @@ export class MySceneAdapter implements SceneAdapter {
   dispose() {
     // Cleanup: stop loops, remove listeners, free resources
   }
+
+  // Boss flow (cosmetic; the daemon owns timing, plan §7.7)
+  async playHandoff(fromId: string, toId: string, opts: HandoffOptions) {
+    // Show a paper going from one character to another ("boss" is the Boss).
+    // Resolve after opts.durationMs, or right away when you cannot animate it.
+  }
+
+  setBoss(info: BossInfo | null) {
+    // Show or hide the Boss character
+  }
+
+  // Optional: setTaskBoard, showSubagent, snapToSeats, setSeatRole, setObjectClickHandler
 }
 ```
 
@@ -103,6 +115,7 @@ The tile editor (furniture placement, floor painting) is pixel-specific and live
 ```
 scene/
   SceneAdapter.ts         ← Interface (AgentInfo, BubbleType, SceneAdapter, SceneComponentProps)
+  sceneInsets.ts          ← Overlays that phones keep the map out from under
   useSceneBridge.ts       ← Store→adapter sync hook (used by page.tsx, not by scenes)
   PixelSceneAdapter.ts    ← Reference implementation wrapping OfficeState
   PixelOfficeScene.tsx    ← Reference implementation (pixel-art canvas)

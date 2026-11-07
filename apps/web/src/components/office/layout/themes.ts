@@ -86,15 +86,27 @@ export function applyPaletteTheme(layout: OfficeLayout, theme: PaletteTheme): Of
   return { ...layout, tileColors: colors }
 }
 
+/**
+ * Validate /themes/index.json: well-formed entries only, each `file` a plain `*.json` name
+ * inside /themes/ (no paths), first entry wins for a repeated id.
+ */
+export function parseThemeIndex(data: unknown): ThemeIndexEntry[] {
+  if (!Array.isArray(data)) return []
+  const seen = new Set<string>()
+  return data.filter((e): e is ThemeIndexEntry => {
+    if (!e || typeof e.id !== 'string' || typeof e.name !== 'string' || typeof e.file !== 'string') return false
+    if (!/^[\w.-]+\.json$/.test(e.file) || e.id === BUILTIN_THEME_ID || seen.has(e.id)) return false
+    seen.add(e.id)
+    return true
+  })
+}
+
 /** The theme list shipped in /themes/index.json (empty when missing or malformed). */
 export async function loadThemeIndex(): Promise<ThemeIndexEntry[]> {
   try {
     const res = await fetch(`${THEMES_BASE}/index.json`)
     if (!res.ok) return []
-    const data: unknown = await res.json()
-    if (!Array.isArray(data)) return []
-    return data.filter((e): e is ThemeIndexEntry =>
-      !!e && typeof e.id === 'string' && typeof e.name === 'string' && typeof e.file === 'string' && /^[\w.-]+\.json$/.test(e.file))
+    return parseThemeIndex(await res.json())
   } catch {
     return []
   }
