@@ -15,6 +15,7 @@ import type { TemplateName } from "./prompt-templates.js";
 import { parseDelegationLine } from "./work-item.js";
 import { SUBAGENT_TOOL_NAMES, SUBAGENT_TOOLS_ALLOW, type LeadRunPolicy } from "./lead-policy.js";
 import type { RunEndReason } from "./dispatcher.js";
+import { isVirtualRun, type AgentDriver, type DriverRunSpec } from "./drivers/driver.js";
 import { getMemoryContext, commitSession, buildRecoveryContext, getRecoveryString, saveSessionHistory, updateWorkState, clearAgentWorkState } from "./memory.js";
 
 /* ── Tool activity summarizer ──────────────────────────────────── */
@@ -198,6 +199,8 @@ export interface AgentSessionOpts {
   memoryContext?: string;
   /** Override model (e.g. "opus", "sonnet") — passed as --model to Claude Code */
   model?: string;
+  /** How runs reach the agent (attached Claude sessions); default: spawn the backend per task */
+  driver?: AgentDriver;
 }
 
 export class AgentSession {
@@ -206,6 +209,8 @@ export class AgentSession {
   readonly role: string;
   readonly personality: string;
   readonly backend: AIBackend;
+  /** Attached sessions only (fork / live); null = spawn the backend per task */
+  readonly driver: AgentDriver | null;
   palette?: number;
   private process: ChildProcess | null = null;
   private currentTaskId: string | null = null;
@@ -266,7 +271,7 @@ export class AgentSession {
   get isAwaitingApproval(): boolean { return this.awaitingSpawnApproval; }
   /** Busy for dispatch purposes: running, waiting for approval, or with queued work */
   get isBusy(): boolean {
-    return !!this.process || this.awaitingSpawnApproval || this.taskQueue.length > 0 || this.dequeuing;
+    return !!this.process || this.awaitingSpawnApproval || this.taskQueue.length > 0 || this.dequeuing || !!this.driver?.externallyBusy?.();
   }
   /** Whether the last failure was a timeout (not retryable) */
   get wasTimeout(): boolean { return this.timedOut; }
@@ -325,6 +330,7 @@ export class AgentSession {
     this.sessionId = loadSessionMap()[opts.agentId] ?? null;
     this.hasHistory = opts.resumeHistory ?? !!this.sessionId;
     this.backend = opts.backend;
+    this.driver = opts.driver ?? null;
     this.permissionPolicy = opts.permissionPolicy ?? (() => "auto");
     this._isTeamLead = opts.isTeamLead ?? false;
     this.teamId = opts.teamId;
@@ -377,9 +383,13 @@ export class AgentSession {
     // Safety: if worktree directory was cleaned up (e.g. by git prune, manual rm,
     // or gateway restart with stale state), fall back to repoPath/workspace to
     // prevent spawn failure → 0-output → session clear cascade.
-    const rawCwd = this.worktreePath ?? repoPath ?? this.workspace;
-    const cwd = (rawCwd && existsSync(rawCwd)) ? rawCwd : (repoPath ?? this.workspace);
-    if (rawCwd !== cwd) {
+    // Attached sessions always run in their own directory (Claude resumes them by cwd);
+    // the team project, when it is elsewhere, is added as an extra directory instead.
+    const pinnedCwd = this.driver?.pinnedCwd;
+    const rawCwd = pinnedCwd ?? this.worktreePath ?? repoPath ?? this.workspace;
+    const cwd = pinnedCwd ?? ((rawCwd && existsSync(rawCwd)) ? rawCwd : (repoPath ?? this.workspace));
+    const addDirs = pinnedCwd && repoPath && path.resolve(repoPath) !== path.resolve(pinnedCwd) && existsSync(repoPath) ? [repoPath] : [];
+    if (!pinnedCwd && rawCwd !== cwd) {
       console.warn(`[Agent ${this.agentId}] Worktree path ${rawCwd} no longer exists, falling back to ${cwd}. Clearing stale worktree + session state.`);
       this.worktreePath = null;
       this.worktreeBranch = null;
@@ -431,9 +441,10 @@ export class AgentSession {
       // history — injecting "[Session recovered] Your previous session was lost" would
       // mislead Claude into ignoring its existing context and following the recovery
       // summary instead. This was the root cause of the "Alex 2 amnesia" bug.
+      const borrowsSession = !!this.driver?.borrowsSession;
       const canResumeSession = !this._isTeamLead && this.hasHistory && !!this.sessionId;
       let recoveryContextStr = "";
-      if (!this._isTeamLead && !canResumeSession) {
+      if (!this._isTeamLead && !canResumeSession && !borrowsSession) {
         const recovery = buildRecoveryContext(this.agentId, {
           originalTask: this.originalTask?.slice(0, 300),
           phase: this.currentPhase ?? undefined,
@@ -452,6 +463,7 @@ export class AgentSession {
         prompt,
         memory: this._memoryContext || getMemoryContext(this.agentId),
         recoveryContext: recoveryContextStr,
+        projectNote: addDirs.length ? `Team project folder: ${addDirs[0]} (shared with the rest of the team).` : "",
       };
       // Capture before template selection modifies it
       const isFirstExecute = this._isTeamLead && phaseOverride === "execute" && !this._hasExecuted;
@@ -459,7 +471,7 @@ export class AgentSession {
       // Resolve subagent type for backends that support it (e.g. Claude Code --agent).
       // Uses the backend.supportsAgentType flag instead of hardcoded id check.
       let agentType: string | undefined;
-      if (this.backend.supportsAgentType && !this._isTeamLead) {
+      if (this.backend.supportsAgentType && !this._isTeamLead && !borrowsSession) {
         const roleName = this.role.split(/\s*[—–]\s*/)[0].trim();
         if (roleName && roleName.length > 2) {
           agentType = roleName;
@@ -467,7 +479,10 @@ export class AgentSession {
       }
 
       let fullPrompt: string;
-      if (leadSelfWork) {
+      if (borrowsSession) {
+        // An attached session keeps its own context: no persona, no Pixel Crew session to resume
+        fullPrompt = this._renderPrompt("worker-attached", templateVars);
+      } else if (leadSelfWork) {
         // Self-work: the Lead does a queued sub-task like a developer would
         fullPrompt = this._renderPrompt("worker-initial", { ...templateVars, role: "Team Lead, doing this task yourself because no developer is free" });
       } else if (this._isTeamLead && phaseOverride && ["create", "design", "complete"].includes(phaseOverride)) {
@@ -513,9 +528,9 @@ export class AgentSession {
       // IMPORTANT: Only use --resume with a specific session ID, never --continue.
       // --continue resumes the LAST Claude Code session globally, which in multi-agent
       // setups causes agent context contamination (e.g. Dev gets Kai's session).
-      const args = this.backend.buildArgs(fullPrompt, {
+      const buildOpts = {
         continue: false,
-        resumeSessionId: this.role.toLowerCase().includes("review") ? undefined : (this.sessionId ?? undefined),
+        resumeSessionId: this.role.toLowerCase().includes("review") || borrowsSession ? undefined : (this.sessionId ?? undefined),
         permissionMode: permission.mode,
         fullAccess,
         // Lead: no tools by default; only the subagent tool when the policy allows it;
@@ -530,13 +545,19 @@ export class AgentSession {
         // Only skip resume on first execute (to shed conversational create/design context).
         // On subsequent runs (result forwarding, user feedback), resume so leader keeps context.
         skipResume: isFirstExecute && this.hasHistory,
-      });
+      };
+      const driverSpec: DriverRunSpec | null = this.driver
+        ? { prompt: fullPrompt, opts: buildOpts, cwd, env: cleanEnv, addDirs, taskId }
+        : null;
+      const launch = this.driver && driverSpec
+        ? this.driver.describe(driverSpec)
+        : { command: this.backend.command, args: this.backend.buildArgs(fullPrompt, buildOpts) };
 
       // Log which binary + env state
-      const resolvedBinary = resolveCommand(this.backend.command, cleanEnv);
-      console.log(`[Agent ${this.name}] Binary: ${resolvedBinary ?? `${this.backend.command} (not found on PATH)`}, CLAUDECODE=${cleanEnv.CLAUDECODE ?? "unset"}, ENTRYPOINT=${cleanEnv.CLAUDE_CODE_ENTRYPOINT ?? "unset"}`);
-      console.log(`[Agent ${this.name}] Spawning: ${this.backend.command} ${args.map(a => a.length > 80 ? a.slice(0, 80) + '...' : a).join(' ')}`);
-      console.log(`[Agent ${this.name}] CWD=${cwd}, worktreePath=${this.worktreePath ?? "none"}`);
+      const resolvedBinary = this.driver?.kind === "live" ? launch.command : resolveCommand(launch.command, cleanEnv);
+      console.log(`[Agent ${this.name}] Binary: ${resolvedBinary ?? `${launch.command} (not found on PATH)`}, CLAUDECODE=${cleanEnv.CLAUDECODE ?? "unset"}, ENTRYPOINT=${cleanEnv.CLAUDE_CODE_ENTRYPOINT ?? "unset"}`);
+      console.log(`[Agent ${this.name}] ${this.driver ? `Attached (${this.driver.kind})` : "Spawning"}: ${launch.command} ${launch.args.map(a => a.length > 80 ? a.slice(0, 80) + '...' : a).join(' ')}`);
+      console.log(`[Agent ${this.name}] CWD=${cwd}, worktreePath=${this.worktreePath ?? "none"}${addDirs.length ? `, addDir=${addDirs[0]}` : ""}`);
 
       // Pre-flight: ensure cwd exists (spawn ENOENT is misleading when cwd is missing)
       if (!existsSync(cwd)) {
@@ -546,12 +567,15 @@ export class AgentSession {
       // stdin MUST be "ignore" — "pipe" causes Claude Code to hang waiting for input
       // group: own process group on Unix so cancel kills the whole tree (taskkill /T on Windows);
       // spawnPortable also unwraps npm .cmd shims on Windows (no cmd.exe, newlines survive)
-      this.process = spawnPortable(this.backend.command, args, {
-        cwd,
-        env: cleanEnv,
-        stdio: ["ignore", "pipe", "pipe"],
-        group: true,
-      });
+      // A virtual run (live mode) has the same surface the handlers below use
+      this.process = this.driver && driverSpec
+        ? this.driver.start(driverSpec) as unknown as ChildProcess
+        : spawnPortable(launch.command, launch.args, {
+          cwd,
+          env: cleanEnv,
+          stdio: ["ignore", "pipe", "pipe"],
+          group: true,
+        });
 
       // Task timeout: only for team members (prevent blocking the team flow).
       // Solo agents have no timeout — user can cancel manually.
@@ -561,10 +585,10 @@ export class AgentSession {
         : CONFIG.timing.workerTimeoutMs;
       if (TASK_TIMEOUT_MS > 0) {
         this.taskTimeout = setTimeout(() => {
-          if (this.process?.pid) {
+          if (this.hasRun) {
             console.log(`[Agent ${this.agentId}] Task timed out after ${TASK_TIMEOUT_MS / 1000}s, killing`);
             this.timedOut = true;
-            killTree(this.process.pid, "SIGKILL");
+            this.killRun("SIGKILL");
           }
         }, TASK_TIMEOUT_MS);
       }
@@ -664,7 +688,7 @@ export class AgentSession {
               // Capture session ID for --resume on next run.
               // Save to disk immediately — if the app crashes mid-task, we need
               // this ID to resume the conversation on restart.
-              if (msg.type === "system" && msg.session_id) {
+              if (msg.type === "system" && msg.session_id && !borrowsSession) {
                 this.sessionId = msg.session_id;
                 saveSessionId(this.agentId, msg.session_id);
                 console.log(`[Agent ${this.name}] Session ID: ${msg.session_id}`);
@@ -1169,11 +1193,23 @@ export class AgentSession {
    * The close handler then reports `reason` as lastEndReason. Returns false if idle.
    */
   abortRun(reason: RunEndReason): boolean {
-    const pid = this.process?.pid;
-    if (!pid) return false;
+    if (!this.hasRun) return false;
     this.abortReason = reason;
-    killTree(pid, "SIGKILL");
+    this.killRun("SIGKILL");
     return true;
+  }
+
+  /** A run is in progress that can be killed (a child with a pid, or a virtual run) */
+  private get hasRun(): boolean {
+    return !!this.process && (isVirtualRun(this.process as never) || !!this.process.pid);
+  }
+
+  /** Kill the current run: the whole process tree, or the virtual run's watchers */
+  private killRun(signal: NodeJS.Signals): void {
+    const p = this.process;
+    if (!p) return;
+    if (isVirtualRun(p as never)) (p as unknown as { kill(): boolean }).kill();
+    else if (p.pid) killTree(p.pid, signal);
   }
 
   private cancelled = false;
@@ -1196,7 +1232,7 @@ export class AgentSession {
     const cancelledTaskId = this.currentTaskId ?? "";
 
     // Kill the running process if there is one
-    if (this.process && this.process.pid) {
+    if (this.hasRun) {
       this.cancelled = true;
       this.lastEndReason = "cancelled";
       this.hasHistory = true;
@@ -1204,8 +1240,7 @@ export class AgentSession {
       this.persistWorkState("cancelled", true);
       this.onTaskComplete?.(this.agentId, cancelledTaskId, "Task cancelled by user", false);
 
-      const pgid = this.process.pid;
-      killTree(pgid, "SIGKILL");
+      this.killRun("SIGKILL");
     }
 
     // Always force UI reset — even if process was already gone.
@@ -1246,10 +1281,9 @@ export class AgentSession {
       }
     }
 
-    if (this.process?.pid) {
-      const pgid = this.process.pid;
+    if (this.hasRun) {
       // Use SIGKILL — CLI agents like codex/claude ignore SIGTERM
-      killTree(pgid, "SIGKILL");
+      this.killRun("SIGKILL");
       this.process = null;
     }
     if (this.awaitingSpawnApproval) {

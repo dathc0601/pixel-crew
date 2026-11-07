@@ -369,6 +369,8 @@ export interface CreateAgentOpts {
   teamId?: string;
   /** Agent-specific working directory (overrides orchestrator-level workspace) */
   workDir?: string;
+  /** An attached Claude Code session: how its runs are delivered (drivers/claude-fork, claude-live) */
+  driver?: import("./drivers/driver.js").AgentDriver;
 }
 
 export interface CreateTeamOpts {

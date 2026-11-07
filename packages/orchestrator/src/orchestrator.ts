@@ -176,6 +176,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEventMap> {
       memoryContext,
       onEvent: (e) => this.handleSessionEvent(e, opts.agentId),
       renderPrompt: (name, vars) => this.promptEngine.render(name, vars),
+      driver: opts.driver,
     });
     session.palette = opts.palette;
     session.leadRunPolicy = (taskId) => this.resolveLeadRunPolicy(taskId);
@@ -357,6 +358,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEventMap> {
     }
     if (this.agentManager.isTeamLead(agentId)) return;
     if (session.role.toLowerCase().includes("review")) return;
+    // Attached sessions work in the owner's own checkout: never branch it into a worktree
+    if (session.driver?.borrowsSession) return;
 
     // Solo agents: create worktree when alwaysIsolate is on, or when a neighbor is working in the same dir.
     if (!session.teamId && !this.worktreeAlwaysIsolate) {
@@ -861,6 +864,11 @@ export class Orchestrator extends EventEmitter<OrchestratorEventMap> {
    * are handed to the Lead again with a "daemon restarted" note. Returns how many
    * items were resumed.
    */
+  /** Re-check the pool now, e.g. when an attached session's owner finished their own turn. */
+  pokeDispatcher(): void {
+    this.dispatcher.poke();
+  }
+
   resumePool(): number {
     const { released, rootsToResume } = this.dispatcher.releaseHeld();
     if (released.length === 0) return 0;

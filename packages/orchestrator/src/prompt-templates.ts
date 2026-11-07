@@ -14,6 +14,7 @@ export type TemplateName =
   | "worker-reviewer-initial"
   | "worker-subagent-reviewer-initial"
   | "worker-continue"
+  | "worker-attached"
   | "worker-direct-fix"
   | "worker-subagent-initial"
   | "worker-subagent-dev-initial"
@@ -220,6 +221,16 @@ ${DELIVERABLE_RULES}
 {{teamRoster}}
 
 ${DELIVERABLE_RULES_FIX}
+
+{{prompt}}`,
+
+  // An existing Claude Code session that joined the team (fork or live attach): it keeps
+  // its own conversation, so no persona and no session reminder, just the hand-off.
+  "worker-attached": `[Pixel Crew] The owner added this Claude Code session to their Pixel Crew team as the developer "{{name}}". The Team Lead is handing you the task below. Use what you already know about this project.
+{{teamRoster}}
+{{projectNote}}
+
+${DELIVERABLE_RULES}
 
 {{prompt}}`,
 

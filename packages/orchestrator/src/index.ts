@@ -32,7 +32,15 @@ export { getDataDir } from "./paths.js";
 export { isPidAlive, isPortOpen, killTree, npmShimTarget, openExternal, pathExtensions, pidsListeningOn, planSpawn, resolveCommand, spawnPortable, spawnPortableSync } from "./proc.js";
 export type { PortableSpawnOptions, SpawnPlan } from "./proc.js";
 export { createFakeBackend, FAKE_AGENT_SCRIPT } from "./testing/fake-backend.js";
+export { VirtualRun, isVirtualRun } from "./drivers/driver.js";
+export type { AgentDriver, AttachMode, AttachTarget, DriverRunSpec, DriverProcess } from "./drivers/driver.js";
+export { buildClaudeForkArgs, createClaudeForkDriver, FORK_NOTE } from "./drivers/claude-fork.js";
+export type { ClaudeForkDriverOptions } from "./drivers/claude-fork.js";
+export { createClaudeLiveDriver, liveMessageLine, liveTaskMarker, postToInbox, LIVE_NOTE, LIVE_NOTE_BYPASS } from "./drivers/claude-live.js";
+export type { ClaudeLiveDriverOptions } from "./drivers/claude-live.js";
 export type { FakeBackendOptions } from "./testing/fake-backend.js";
+export { startFakeClaudeSession, FAKE_CLAUDE_SESSION_SCRIPT } from "./testing/fake-session.js";
+export type { FakeClaudeSession, FakeClaudeSessionOptions } from "./testing/fake-session.js";
 export type { TeamPhaseInfo } from "./phase-machine.js";
 export type {
   AgentStatus,
