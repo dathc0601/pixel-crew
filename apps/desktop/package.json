@@ -3,9 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "predev": "mkdir -p src-tauri/sidecar/web && touch src-tauri/sidecar/gateway.js src-tauri/sidecar/node",
-    "dev": "[ -f \"$HOME/.cargo/env\" ] && . \"$HOME/.cargo/env\"; tauri dev",
-    "build": "[ -f \"$HOME/.cargo/env\" ] && . \"$HOME/.cargo/env\"; tauri build",
+    "dev": "node scripts/tauri.mjs dev",
+    "build": "node scripts/tauri.mjs build",
     "tauri": "tauri"
   },
   "devDependencies": {

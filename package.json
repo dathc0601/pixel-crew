@@ -13,7 +13,7 @@
     "publish:release": "pnpm run build:release && cd apps/gateway && npm publish",
     "lint": "eslint .",
     "dev:desktop": "pnpm --filter pixel-crew-desktop dev",
-    "build:desktop": "bash scripts/install-desktop.sh",
+    "build:desktop": "node scripts/install-desktop.mjs",
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "pnpm -r --if-present test"
   },
