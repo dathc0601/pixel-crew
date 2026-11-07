@@ -1,0 +1,90 @@
+name: npm publish
+
+# Publishes the `pixel-crew` package (the gateway with the web UI bundled) with npm
+# provenance. Runs after a release (from release-please.yml) or by hand for an existing tag.
+# Without an NPM_TOKEN repository secret the publish job is skipped, not failed.
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag to publish (vX.Y.Z)
+        type: string
+        required: true
+    secrets:
+      NPM_TOKEN:
+        required: false
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish (vX.Y.Z)
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: NPM_TOKEN configured?
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.token.outputs.enabled }}
+    steps:
+      - id: token
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "$NPM_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=npm publish skipped::Add an NPM_TOKEN repository secret to publish pixel-crew to npm."
+          fi
+
+  publish:
+    needs: check
+    if: needs.check.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm provenance
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Version matches the tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          version="$(node -p "require('./apps/gateway/package.json').version")"
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::apps/gateway/package.json is $version but the tag is $TAG"
+            exit 1
+          fi
+
+      - name: Build (web UI + gateway bundle)
+        run: pnpm run build:release
+
+      # pnpm pack rewrites workspace: ranges; npm publish adds the provenance statement
+      - name: Publish
+        working-directory: apps/gateway
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          cp ../../LICENSE .
+          pnpm pack
+          npm publish ./pixel-crew-*.tgz --provenance --access public

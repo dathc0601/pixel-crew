@@ -11,7 +11,7 @@
     "start": "pnpm --filter web build && pnpm --filter pixel-crew start",
     "build": "pnpm -r build",
     "build:release": "pnpm --filter web build && pnpm --filter pixel-crew build",
-    "publish:release": "pnpm run build:release && cd apps/gateway && npm publish",
+    "publish:release": "pnpm run build:release && pnpm --filter pixel-crew publish --access public",
     "lint": "eslint .",
     "dev:desktop": "pnpm --filter pixel-crew-desktop dev",
     "build:desktop": "node scripts/install-desktop.mjs",

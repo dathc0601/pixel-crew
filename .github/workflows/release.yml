@@ -1,25 +1,68 @@
 name: Desktop builds
 
-# Builds unsigned desktop installers for macOS, Windows and Linux and uploads them as
-# workflow artifacts. It never creates a tag or a GitHub release: tauri-action only
-# publishes when tagName/releaseId are set, and they are not set here.
+# Builds unsigned desktop installers for macOS, Windows and Linux.
+# - With a release tag (a pushed vX.Y.Z tag, the `tag` input, or a call from
+#   release-please.yml) the installers are attached to that GitHub release. A pushed tag
+#   without a release gets a draft release, so a stray tag never publishes anything.
+# - Without a tag (manual run) they are uploaded as workflow artifacts only.
+# This workflow never creates tags.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to attach the installers to (leave empty for artifacts only)
+        type: string
+        required: false
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag to attach the installers to
+        type: string
+        required: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: desktop-${{ github.ref }}
-  cancel-in-progress: true
+  group: desktop-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name) || '' }}
 
 jobs:
+  release:
+    name: Find the release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      id: ${{ steps.find.outputs.id }}
+    steps:
+      - id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if [ -z "$RELEASE_TAG" ]; then
+            echo "No tag: installers become workflow artifacts only."
+            echo "id=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes --title "Pixel Crew $RELEASE_TAG"
+          fi
+          echo "id=$(gh release view "$RELEASE_TAG" --json databaseId --jq .databaseId)" >> "$GITHUB_OUTPUT"
+
   build:
     name: ${{ matrix.name }}
+    needs: release
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    permissions:
+      contents: write # upload installers to the release
     strategy:
       fail-fast: false
       matrix:
@@ -72,13 +115,17 @@ jobs:
 
       # beforeBuildCommand (scripts/build-desktop.mjs) builds the web UI and the gateway
       # bundle. Node.js is not bundled: the app runs on the user's Node.js 22+.
+      # With releaseId set, tauri-action uploads the installers to that release.
       - name: Build the app (unsigned)
         id: tauri
         uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         with:
           projectPath: apps/desktop
           tauriScript: pnpm tauri
           args: ${{ matrix.args }}
+          releaseId: ${{ needs.release.outputs.id }}
 
       - name: Installer sizes
         shell: bash
