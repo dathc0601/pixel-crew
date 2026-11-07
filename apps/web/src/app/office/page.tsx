@@ -1021,8 +1021,8 @@ export default function OfficePage() {
   }, [suggestText]);
 
   const [showShareMenu, setShowShareMenu] = useState(false);
-  // Phase 2: Console mode is now default. Persisted to localStorage.
-  const [consoleMode, setConsoleMode] = useState(true); // SSR-safe default; restored from localStorage in useEffect
+  // The pixel office is the default view; console mode is opt-in. Persisted to localStorage.
+  const [consoleMode, setConsoleMode] = useState(false); // SSR-safe default; restored from localStorage in useEffect
   // Freeze scroll during CSS width transition (300ms) to prevent scroll corruption
   const [scrollFrozen, setScrollFrozen] = useState(false);
   // Multi-pane state (console mode only)
@@ -1030,14 +1030,16 @@ export default function OfficePage() {
   const [paneOffset, setPaneOffset] = useState(0);
   type ImageItem = { name: string; dataUrl: string; base64: string };
   const [panePendingImages, setPanePendingImages] = useState<Map<string, ImageItem[]>>(new Map());
-  const [sceneVisible, setSceneVisible] = useState(false); // SSR-safe default; restored from localStorage in useEffect
+  const [sceneVisible, setSceneVisible] = useState(true); // SSR-safe default; restored from localStorage in useEffect
 
-  // Restore view mode from localStorage after hydration (avoids SSR mismatch)
+  // Restore view mode from localStorage after hydration (avoids SSR mismatch).
+  // Only an explicit "console" choice leaves the office view.
   useEffect(() => {
-    const saved = localStorage.getItem("office-view-mode");
-    if (saved === "office") {
-      setConsoleMode(false);
-      setSceneVisible(true);
+    let saved: string | null = null;
+    try { saved = localStorage.getItem("office-view-mode"); } catch { /* storage blocked: keep the office */ }
+    if (saved === "console") {
+      setSceneVisible(false);
+      setConsoleMode(true);
     }
   }, []);
 
