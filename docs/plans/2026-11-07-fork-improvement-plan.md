@@ -1,7 +1,7 @@
 # Fork Improvement Plan: from "Open Office" to a pixel-art AI mini company
 
 Date: 2026-11-07
-Status: owner decisions recorded (§0). Phase 0 implemented on branch `phase-0-foundation` (2026-11-07); see the status lines under each P0 item.
+Status: owner decisions recorded (§0). Phase 0 merged (2026-11-07). Phase 1 daemon side implemented on branch `phase-1-boss-flow` (2026-11-07); UI items (P1.4–P1.6, P1.8) pending. See the status lines under each item.
 Scope: `~/WebstormProjects/OpenOffice`. `origin` is `github.com/dathc0601/pixel-crew` (renamed from OpenOffice on 2026-11-07); `upstream` is `github.com/longyangxi/OpenOffice` (formerly "bit-office", MIT).
 
 Legend used throughout:
@@ -342,6 +342,7 @@ Each task lists its goal, the files involved, the approach, acceptance criteria,
 ### Phase 1 — MVP: the Boss → Lead → Dev walking flow (about 2–3 weeks)
 
 **P1.1 Work-item model and Dispatcher (L, core).**
+- **Status: DONE (daemon).** `packages/orchestrator/src/{work-item,dispatcher}.ts`: §7.4 state machine, urgent-then-FIFO pool, idle devs only (preference > skill > least recently busy), `@Name!:` pins, `TASK:`/`TASK[skill]:`, zombie re-queue (exit without result or 10-min heartbeat, `maxAttempts` 2, then escalated to the Lead), pool in `team-state.json` (running → queued on restart). Reviews and direct fixes stay on `DelegationRouter`; delivered items wait `in_review` when the team has a reviewer.
 - *Files:* new `packages/orchestrator/src/dispatcher.ts` and `work-item.ts`; changes to `delegation.ts`, `agent-session.ts`, `orchestrator.ts`, and `packages/shared/src/{commands,events,types}.ts`.
 - *Approach:* see §7.4 for the semantics.
   - The daemon owns a `WorkItem { id, parentId, title, prompt, priority: "normal"|"urgent", requiredSkills?, preferredVendor?, state, assigneeId?, attempts, createdAt, heartbeatAt }`.
@@ -354,6 +355,7 @@ Each task lists its goal, the files involved, the approach, acceptance criteria,
 - *Risk:* The delegation code has many interacting counters (budget, depth, review loop). Keep `DelegationRouter` for review and result batching, and put the Dispatcher in front of `target.runTask`.
 
 **P1.2 Boss permission model (M).**
+- **Status: DONE (daemon).** `lead-policy.ts`: Lead runs with `--tools ""`; subagents → `--tools Agent`; self-work → default tools plus `--disallowedTools Agent,Task`. Per-task flags only narrow the config, except `urgent_only` (needs `urgent` + flag `true`). Flags checked with `claude --help` (2.1.319); the tool name `Agent` (alias `Task`) was read from the CLI bundle, not from a live run.
 - *Files:* `packages/shared/src/commands.ts` (new `BOSS_ASSIGN`), `dispatcher.ts`, `agent-session.ts` (the `noTools` switch), `apps/gateway/src/backends.ts` (a disallowed-tools option for Claude).
 - *Approach:* see §7.3. `BOSS_ASSIGN { prompt, urgent, allowLeadSelfWork, allowSubagents, budgetUsd? }`. Policy is enforced in the daemon:
   - The Lead runs tool-less by default.
@@ -362,6 +364,7 @@ Each task lists its goal, the files involved, the approach, acceptance criteria,
 - *Acceptance:* Tests show the Lead never gets tools without the flag, and that the flag plus no idle dev for `waitMs` produces a `LEAD_SELF_WORK` event.
 
 **P1.3 Protocol events for choreography (S).**
+- **Status: DONE.** `BOSS_ASSIGN`, `GET_OFFICE_CONFIG`/`SET_OFFICE_CONFIG` (owner-only, atomic write, broadcast) and `WORK_ITEM_UPDATED`, `HANDOFF` (with `durationMs`), `LEAD_WAITING`, `LEAD_SELF_WORK`, `LEAD_SUBAGENT_STARTED`, `OFFICE_CONFIG` in `packages/shared`; web client uses `parseGatewayEvent` (safeParse, unknown events dropped). Hand-off timing is daemon-owned (§0.4).
 - *Files:* `packages/shared/src/events.ts`.
 - *New events:*
   - `WORK_ITEM_UPDATED {item}`
@@ -372,6 +375,7 @@ Each task lists its goal, the files involved, the approach, acceptance criteria,
 - *Acceptance:* Schemas are covered by unit tests. Old clients ignore the unknown events. Make the client use `safeParse` and drop unknown events instead of throwing.
 
 **P1.4 Scene choreography API (M).**
+- **Status: TODO (UI).**
 - *Files:* `scene/SceneAdapter.ts` (add `playHandoff(fromId, toId, opts): Promise<void>` and `setBoss(info)`), `scene/PixelSceneAdapter.ts`, `engine/characters.ts`, `engine/officeState.ts`, `layout/tileMap.ts`, `scene/useSceneBridge.ts`.
 - *Approach:*
   - Add character states `WALK_TO` (target = a walkable tile adjacent to the recipient's seat, found with BFS over neighbours), `HANDOFF` (about 600 ms: face each other, show a paper prop and a speech bubble with the label), and `RETURN` (walk back to own seat).
@@ -385,6 +389,7 @@ Each task lists its goal, the files involved, the approach, acceptance criteria,
 - *Risk:* Seat-blocked tiles (`blockedTiles`). Reuse the existing `findPath` with the target tile temporarily unblocked.
 
 **P1.5 Boss character and task composer (M).**
+- **Status: TODO (UI).** Daemon side (`BOSS_ASSIGN`) is ready.
 - *Files:* new `components/office/ui/BossComposer.tsx`; changes to `app/office/page.tsx`, `store/office-store.ts`, `engine/officeState.ts`.
 - *Approach:*
   - The Boss is a local-only character with a distinct sprite, seated in the Boss room.
@@ -392,11 +397,11 @@ Each task lists its goal, the files involved, the approach, acceptance criteria,
   - Submitting sends `BOSS_ASSIGN`, and the daemon emits `HANDOFF boss_to_lead`.
 - *Acceptance:* A first-time user completes Boss → Lead → Dev without opening a side panel.
 
-**P1.6 Lead waiting and queue visualization (S).** When `LEAD_WAITING` fires, the Lead stands at a "task board" furniture item (or shows a clock bubble) holding N papers. Clicking the board lists the queued work items. *Acceptance:* the queue length on the board matches the daemon state.
+**P1.6 Lead waiting and queue visualization (S).** **Status: TODO (UI);** `LEAD_WAITING` and `WORK_ITEM_UPDATED` (also replayed on `PING`) are emitted. When `LEAD_WAITING` fires, the Lead stands at a "task board" furniture item (or shows a clock bubble) holding N papers. Clicking the board lists the queued work items. *Acceptance:* the queue length on the board matches the daemon state.
 
-**P1.7 Opt-out of the auto "greet" Lead run (S).** `apps/gateway/src/index.ts:660`: creating a team should not spend tokens until the Boss assigns something.
+**P1.7 Opt-out of the auto "greet" Lead run (S).** **Status: DONE** for `CREATE_TEAM` (no Lead run until the Boss assigns work); `END_PROJECT` still greets. `apps/gateway/src/index.ts:660`: creating a team should not spend tokens until the Boss assigns something.
 
-**P1.8 Split the monoliths opportunistically (M).** Extract the hand-off and Boss features into their own modules instead of growing `app/office/page.tsx` (2675 lines) and `office-store.ts` (1172 lines). Don't do a big-bang refactor.
+**P1.8 Split the monoliths opportunistically (M).** **Status: TODO (UI).** Extract the hand-off and Boss features into their own modules instead of growing `app/office/page.tsx` (2675 lines) and `office-store.ts` (1172 lines). Don't do a big-bang refactor.
 
 ### Phase 2 — Multi-vendor: ACP, Antigravity, attach vs spawn (about 2–3 weeks)
 
