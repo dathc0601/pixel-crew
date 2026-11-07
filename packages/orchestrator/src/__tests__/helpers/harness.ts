@@ -5,6 +5,7 @@ import { createOrchestrator, createFakeBackend, setSessionDir, setStorageRoot } 
 import type { Orchestrator } from "../../orchestrator.js";
 import type { OrchestratorEvent } from "../../types.js";
 import type { PermissionPolicy } from "../../permissions.js";
+import type { LeadPolicyConfig } from "../../lead-policy.js";
 
 export interface ScenarioRule {
   match: string;
@@ -18,6 +19,7 @@ export interface ScenarioRule {
 
 export interface Harness {
   orc: Orchestrator;
+  root: string;
   events: OrchestratorEvent[];
   workspace: string;
   records(): Array<{ argv: string[]; cwd: string; rule: number | "default" }>;
@@ -31,6 +33,7 @@ const ALL_EVENTS = [
   "approval:needed", "log:append", "log:activity", "team:chat", "task:queued", "agent:activity",
   "worktree:created", "worktree:merged", "worktree:ready", "autoMerge:updated", "token:update",
   "agent:created", "agent:fired", "task:result-returned", "team:phase",
+  "work:updated", "handoff", "lead:waiting", "lead:self-work", "lead:subagent-started",
 ] as const;
 
 /**
@@ -42,8 +45,14 @@ export function createHarness(opts: {
   defaultRule?: ScenarioRule;
   supportsAutoPermission?: boolean;
   permissionPolicy?: (backendId: string) => PermissionPolicy;
+  /** Hand-off duration (default 0 so runs stay fast) */
+  handoffDurationMs?: () => number;
+  leadPolicy?: () => LeadPolicyConfig;
+  dispatch?: { maxAttempts?: number; heartbeatTimeoutMs?: number };
+  /** Reuse a workspace/instance dir (restart tests) */
+  root?: string;
 }): Harness {
-  const root = mkdtempSync(join(TEST_HOME, "run-"));
+  const root = opts.root ?? mkdtempSync(join(TEST_HOME, "run-"));
   const workspace = join(root, "workspace");
   mkdirSync(workspace, { recursive: true });
   setSessionDir(join(root, "instance"));
@@ -60,6 +69,9 @@ export function createHarness(opts: {
     worktree: false,
     retry: false,
     permissionPolicy: opts.permissionPolicy,
+    handoffDurationMs: opts.handoffDurationMs ?? (() => 0),
+    leadPolicy: opts.leadPolicy,
+    dispatch: opts.dispatch,
   });
 
   const events: OrchestratorEvent[] = [];
@@ -78,6 +90,7 @@ export function createHarness(opts: {
 
   return {
     orc,
+    root,
     events,
     workspace,
     records() {
