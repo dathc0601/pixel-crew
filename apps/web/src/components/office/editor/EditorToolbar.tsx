@@ -1,8 +1,9 @@
 "use client"
 
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { EditTool } from '../types'
-import type { TileType as TileTypeVal, FloorColor } from '../types'
+import { EditTool, ZONE_KINDS } from '../types'
+import type { TileType as TileTypeVal, FloorColor, ZoneKind } from '../types'
+import { ZONE_LABELS, ZONE_TINTS } from '../layout/zones'
 import { getCatalogByCategory, getActiveCategories } from '../layout/furnitureCatalog'
 import type { FurnitureCategory } from '../layout/furnitureCatalog'
 import { getCachedSprite } from '../sprites/spriteCache'
@@ -56,6 +57,9 @@ interface EditorToolbarProps {
   onWallColorChange: (color: FloorColor) => void
   onSelectedFurnitureColorChange: (color: FloorColor | null) => void
   onFurnitureTypeChange: (type: string) => void
+  /** Zone painted by the Zones tool (null erases zones) */
+  selectedZone?: ZoneKind | null
+  onZoneChange?: (zone: ZoneKind | null) => void
 }
 
 /** Render a floor pattern preview at 2x */
@@ -150,6 +154,8 @@ export default function EditorToolbar({
   onWallColorChange,
   onSelectedFurnitureColorChange,
   onFurnitureTypeChange,
+  selectedZone = null,
+  onZoneChange,
 }: EditorToolbarProps) {
   const [activeCategory, setActiveCategory] = useState<FurnitureCategory>('desks')
   const [showColor, setShowColor] = useState(false)
@@ -178,6 +184,7 @@ export default function EditorToolbar({
   const isWallActive = activeTool === EditTool.WALL_PAINT
   const isEraseActive = activeTool === EditTool.ERASE
   const isFurnitureActive = activeTool === EditTool.FURNITURE_PLACE || activeTool === EditTool.FURNITURE_PICK
+  const isZoneActive = activeTool === EditTool.ZONE_PAINT
 
   return (
     <div
@@ -219,7 +226,33 @@ export default function EditorToolbar({
           onClick={() => onToolChange(EditTool.FURNITURE_PLACE)}
           title="Place furniture"
         >Furniture</button>
+        {onZoneChange && (
+          <button
+            style={isZoneActive ? activeBtnStyle : btnStyle}
+            onClick={() => onToolChange(EditTool.ZONE_PAINT)}
+            title="Paint rooms: where the Boss, the Lead and the devs sit"
+          >Zones</button>
+        )}
       </div>
+
+      {/* Sub-panel: zones */}
+      {isZoneActive && onZoneChange && (
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+          {ZONE_KINDS.map((z) => (
+            <button
+              key={z}
+              style={{ ...(selectedZone === z ? activeBtnStyle : btnStyle), boxShadow: `inset 0 -3px 0 ${ZONE_TINTS[z].replace(/[\d.]+\)$/, '0.9)')}` }}
+              onClick={() => onZoneChange(z)}
+              title={`Paint ${ZONE_LABELS[z].toLowerCase()} tiles`}
+            >{ZONE_LABELS[z]}</button>
+          ))}
+          <button
+            style={selectedZone === null ? activeBtnStyle : btnStyle}
+            onClick={() => onZoneChange(null)}
+            title="Remove the zone from tiles"
+          >No zone</button>
+        </div>
+      )}
 
       {/* Sub-panel: Floor tiles */}
       {isFloorActive && (

@@ -15,6 +15,7 @@ import {
 } from '@/components/office/editor/editorActions'
 import type { ExpandDirection } from '@/components/office/editor/editorActions'
 import { getCatalogEntry, isRotatable } from '@/components/office/layout/furnitureCatalog'
+import { paintZone } from '@/components/office/layout/zones'
 import { LAYOUT_SAVE_DEBOUNCE_MS } from '@/components/office/constants'
 import type { OfficeState } from '@/components/office/engine/officeState'
 import { nanoid } from 'nanoid'
@@ -32,7 +33,7 @@ export function loadLayoutFromStorage(): OfficeLayout | null {
     const json = localStorage.getItem(LAYOUT_STORAGE_KEY)
     if (!json) return null
     const obj = JSON.parse(json)
-    if (obj && obj.version === 1) return obj as OfficeLayout
+    if (obj && (obj.version === 1 || obj.version === 2)) return obj as OfficeLayout
   } catch { /* ignore */ }
   return null
 }
@@ -90,6 +91,14 @@ export function useEditorActions(
         editor.pushUndo(layout)
         editor.clearRedo()
         applyLayout(paintTile(layout, col, row, editor.selectedTileType, editor.floorColor))
+        break
+      }
+      case EditTool.ZONE_PAINT: {
+        const next = paintZone(layout, col, row, editor.selectedZone)
+        if (next === layout) break
+        editor.pushUndo(layout)
+        editor.clearRedo()
+        applyLayout(next)
         break
       }
       case EditTool.WALL_PAINT: {

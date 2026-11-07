@@ -1,5 +1,5 @@
 import { EditTool, TileType } from '../types'
-import type { EditTool as EditToolType, TileType as TileTypeVal, FloorColor, OfficeLayout } from '../types'
+import type { EditTool as EditToolType, TileType as TileTypeVal, FloorColor, OfficeLayout, ZoneKind } from '../types'
 import { UNDO_STACK_MAX_SIZE, DEFAULT_FLOOR_COLOR, DEFAULT_WALL_COLOR } from '../constants'
 
 export class EditorState {
@@ -7,6 +7,8 @@ export class EditorState {
   activeTool: EditToolType = EditTool.SELECT
   selectedTileType: TileTypeVal = TileType.FLOOR_1
   selectedFurnitureType = 'desk'
+  /** Zone the Zones tool paints (null erases) */
+  selectedZone: ZoneKind | null = 'dev_area'
 
   // Floor color settings
   floorColor: FloorColor = { ...DEFAULT_FLOOR_COLOR }

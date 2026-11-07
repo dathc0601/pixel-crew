@@ -1413,6 +1413,8 @@ export default function OfficePage() {
             onWallColorChange={(color) => { editor.wallColor = color; forceUpdate((n) => n + 1); }}
             onSelectedFurnitureColorChange={handleSelectedFurnitureColorChange}
             onFurnitureTypeChange={(type) => { editor.selectedFurnitureType = type; editor.activeTool = EditTool.FURNITURE_PLACE; forceUpdate((n) => n + 1); }}
+            selectedZone={editor.selectedZone}
+            onZoneChange={(zone) => { editor.selectedZone = zone; forceUpdate((n) => n + 1); }}
           />
         )}
 

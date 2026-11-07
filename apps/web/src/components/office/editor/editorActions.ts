@@ -1,6 +1,6 @@
 import { TileType, MAX_COLS, MAX_ROWS } from '../types'
 import { DEFAULT_NEUTRAL_COLOR } from '../constants'
-import type { TileType as TileTypeVal, OfficeLayout, PlacedFurniture, FloorColor } from '../types'
+import type { TileType as TileTypeVal, OfficeLayout, PlacedFurniture, FloorColor, ZoneKind } from '../types'
 import { getCatalogEntry, getRotatedType, getToggledType } from '../layout/furnitureCatalog'
 import { getPlacementBlockedTiles } from '../layout/layoutSerializer'
 
@@ -190,6 +190,7 @@ export function expandLayout(
 
   const newTiles: TileTypeVal[] = new Array(newCols * newRows).fill(TileType.VOID as TileTypeVal)
   const newColors: Array<FloorColor | null> = new Array(newCols * newRows).fill(null)
+  const newZones = layout.zones ? new Array<ZoneKind | null>(newCols * newRows).fill(null) : undefined
 
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
@@ -197,6 +198,7 @@ export function expandLayout(
       const newIdx = (r + shiftRow) * newCols + (c + shiftCol)
       newTiles[newIdx] = tiles[oldIdx]
       newColors[newIdx] = existingColors[oldIdx]
+      if (newZones) newZones[newIdx] = layout.zones?.[oldIdx] ?? null
     }
   }
 
@@ -207,7 +209,7 @@ export function expandLayout(
   }))
 
   return {
-    layout: { ...layout, cols: newCols, rows: newRows, tiles: newTiles, tileColors: newColors, furniture: newFurniture },
+    layout: { ...layout, cols: newCols, rows: newRows, tiles: newTiles, tileColors: newColors, furniture: newFurniture, ...(newZones ? { zones: newZones } : {}) },
     shift: { col: shiftCol, row: shiftRow },
   }
 }
