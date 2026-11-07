@@ -732,11 +732,21 @@ export default function OfficePage() {
   const handleFire = useCallback(async (agentId: string) => {
     const agent = agents.get(agentId);
     if (agent?.isExternal) {
-      if (!await confirm(`Kill external process ${agent.name}? (PID ${agent.pid})`)) return;
-      sendCommand({ type: "KILL_EXTERNAL", agentId });
+      const ok = await confirm(`Kill ${agent.name}? This closes your terminal session.`, {
+        title: "Kill external process",
+        details: [
+          `PID ${agent.pid ?? "unknown"}`,
+          `Folder: ${agent.cwd ?? agent.workDir ?? "unknown"}`,
+          "The process gets SIGKILL: unsaved work in that session is lost.",
+        ],
+        confirmLabel: "Kill process",
+        cancelLabel: "Cancel",
+      });
+      if (!ok) return;
+      if (!sendCommand({ type: "KILL_EXTERNAL", agentId })) return;
     } else {
       if (!await confirm(`Fire ${agent?.name ?? agentId}?`)) return;
-      sendCommand({ type: "FIRE_AGENT", agentId });
+      if (!sendCommand({ type: "FIRE_AGENT", agentId })) return;
     }
     if (selectedAgent === agentId) {
       setSelectedAgent(null);

@@ -589,10 +589,10 @@ const AgentPane = memo(function AgentPane(props: AgentPaneProps) {
               <button
                 className="tdx"
                 onClick={(e) => { e.stopPropagation(); onFire(agentId); }}
-                aria-label="Fire agent"
+                aria-label={isExternal ? "Kill process" : "Fire agent"}
               >{"\u2715"}</button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">Fire agent</TooltipContent>
+            <TooltipContent side="bottom">{isExternal ? "Kill process (asks first)" : "Fire agent"}</TooltipContent>
           </Tooltip>
         )}
       </div>

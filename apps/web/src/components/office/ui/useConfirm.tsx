@@ -8,11 +8,19 @@ import dynamic from "next/dynamic";
 
 const ConfirmModal = dynamic(() => import("./ConfirmModal"), { ssr: false });
 
+export interface ConfirmOptions {
+  title?: string;
+  /** Extra lines under the message, e.g. what exactly is affected */
+  details?: string[];
+  confirmLabel?: string;
+  cancelLabel?: string;
+}
+
 export function useConfirm() {
-  const [state, setState] = useState<{ message: string; resolve: (v: boolean) => void } | null>(null);
-  const confirm = useCallback((message: string): Promise<boolean> => {
+  const [state, setState] = useState<{ message: string; opts: ConfirmOptions; resolve: (v: boolean) => void } | null>(null);
+  const confirm = useCallback((message: string, opts: ConfirmOptions = {}): Promise<boolean> => {
     return new Promise((resolve) => {
-      setState({ message, resolve });
+      setState({ message, opts, resolve });
     });
   }, []);
   const handleConfirm = useCallback(() => {
@@ -24,7 +32,7 @@ export function useConfirm() {
     setState(null);
   }, [state]);
   const modal = state ? (
-    <ConfirmModal message={state.message} onConfirm={handleConfirm} onCancel={handleCancel} />
+    <ConfirmModal message={state.message} {...state.opts} onConfirm={handleConfirm} onCancel={handleCancel} />
   ) : null;
   return { confirm, modal };
 }
