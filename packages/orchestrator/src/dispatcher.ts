@@ -11,6 +11,8 @@
 //   failure is forwarded to the Lead.
 // - Lead self-work: when the policy allows it and an item waited waitMs with no
 //   idle dev, the Lead takes it (one at a time).
+// - Held items (restored after a daemon restart) are invisible to all of the
+//   above until releaseHeld(): they never start, wait or count as pending work.
 // ---------------------------------------------------------------------------
 
 import { nanoid } from "nanoid";
@@ -98,6 +100,8 @@ export interface EnqueueSpec {
 }
 
 const MAX_TERMINAL_ITEMS = 100;
+/** States an item can be cancelled from with CANCEL_WORK_ITEM (no agent is working on it) */
+const NOT_STARTED: ReadonlySet<WorkItemState> = new Set(["queued", "assigned", "handing_off"]);
 
 export class Dispatcher {
   private items = new Map<string, WorkItem>();
@@ -144,18 +148,26 @@ export class Dispatcher {
     return [...this.items.values()].sort((a, b) => this.seqOf(a) - this.seqOf(b)).map((i) => ({ ...i }));
   }
 
+  /** Items waiting for a dev (held items do not count) */
   queuedCount(): number {
     let n = 0;
-    for (const i of this.items.values()) if (i.state === "queued") n++;
+    for (const i of this.items.values()) if (i.state === "queued" && !i.held) n++;
     return n;
   }
 
-  /** Items that still need a dev or are being worked on (in_review does not count) */
+  /** Items that still need a dev or are being worked on (in_review and held items do not count) */
   hasActiveItems(): boolean {
     for (const i of this.items.values()) {
-      if (i.origin === "lead" && (i.state === "queued" || ACTIVE_STATES.has(i.state))) return true;
+      if (i.origin === "lead" && !i.held && (i.state === "queued" || ACTIVE_STATES.has(i.state))) return true;
     }
     return false;
+  }
+
+  /** Items paused after a daemon restart (see restore / releaseHeld) */
+  heldCount(): number {
+    let n = 0;
+    for (const i of this.items.values()) if (i.held) n++;
+    return n;
   }
 
   /** At least one dev exists and none is idle */
@@ -164,17 +176,18 @@ export class Dispatcher {
     return devs.length > 0 && devs.every((d) => !this.isIdle(d));
   }
 
-  /** Most recent Boss item that is not finished */
+  /** Most recent Boss item that is not finished (held ones excluded) */
   currentRoot(): WorkItem | undefined {
     let best: WorkItem | undefined;
     for (const i of this.items.values()) {
-      if (i.origin === "boss" && !isTerminal(i.state) && (!best || this.seqOf(i) > this.seqOf(best))) best = i;
+      if (i.origin === "boss" && !i.held && !isTerminal(i.state) && (!best || this.seqOf(i) > this.seqOf(best))) best = i;
     }
     return best;
   }
 
+  /** Unfinished Boss items, held ones excluded (a Lead result must never finish a held item) */
   activeRoots(): WorkItem[] {
-    return this.list().filter((i) => i.origin === "boss" && !isTerminal(i.state));
+    return this.list().filter((i) => i.origin === "boss" && !i.held && !isTerminal(i.state));
   }
 
   /** BOSS_ASSIGN flags governing an item (its own for Boss items, the parent's for sub-tasks) */
@@ -601,34 +614,109 @@ export class Dispatcher {
   /**
    * Restore a saved pool. Items that were assigned, handing off or running become
    * queued again; Boss items with sub-tasks still to do stay running (the Lead holds
-   * them); Boss items with nothing pending are returned so the caller can re-run the Lead.
+   * them); Boss items with nothing pending become queued for a new Lead run.
+   *
+   * hold (default true): every restored item that would start work (queued sub-tasks,
+   * every unfinished Boss item) is marked held and nothing starts until releaseHeld().
+   * hold false: no item is held and Boss items with nothing pending are returned so
+   * the caller can re-run the Lead.
    */
-  restore(saved: WorkItem[]): { rootsToResume: WorkItem[] } {
-    const rootsToResume: WorkItem[] = [];
+  restore(saved: WorkItem[], opts: { hold?: boolean } = {}): { rootsToResume: WorkItem[]; held: number } {
+    const hold = opts.hold ?? true;
+    const restored: WorkItem[] = [];
     for (const raw of saved) {
       if (!raw || typeof raw.id !== "string" || this.items.has(raw.id)) continue;
-      const item: WorkItem = { ...raw, selfWork: undefined };
+      const item: WorkItem = { ...raw, selfWork: undefined, held: undefined };
       if (item.origin === "lead" && (ACTIVE_STATES.has(item.state))) {
         item.state = "queued";
         item.assigneeId = null;
         item.error = "Re-queued after a daemon restart";
       }
       this.add(item);
+      restored.push(item);
     }
-    for (const item of this.items.values()) {
-      if (item.origin === "lead" && item.state === "queued") this.armSelfWorkTimer(item);
+    const rootsToResume: WorkItem[] = [];
+    let held = 0;
+    for (const item of restored) {
+      if (item.origin === "lead" && item.state === "queued") {
+        if (hold) { item.held = true; held++; } else this.armSelfWorkTimer(item);
+      }
       if (item.origin !== "boss" || isTerminal(item.state)) continue;
-      const pending = this.childrenOf(item.id).some((c) => c.state === "queued" || ACTIVE_STATES.has(c.state));
-      if (pending) {
+      if (this.hasPendingChildren(item.id)) {
         item.state = "running";
       } else {
         item.state = "queued";
         item.assigneeId = null;
-        rootsToResume.push({ ...item });
+        if (!hold) rootsToResume.push({ ...item });
       }
+      if (hold) { item.held = true; held++; }
     }
     for (const item of this.list()) this.host.emit({ type: "work:updated", item });
-    return { rootsToResume };
+    return { rootsToResume, held };
+  }
+
+  /**
+   * Un-hold every held item (RESUME_POOL). Sub-tasks go back to the normal queue (the
+   * caller pumps). Returns the released items and the Boss items to re-hand to the
+   * Lead: those with no sub-task left to do (a held Boss item whose sub-tasks were all
+   * cancelled meanwhile counts too).
+   */
+  releaseHeld(): { released: WorkItem[]; rootsToResume: WorkItem[] } {
+    const held = [...this.items.values()].filter((i) => i.held).sort((a, b) => this.seqOf(a) - this.seqOf(b));
+    for (const item of held) item.held = undefined;
+    const rootsToResume: WorkItem[] = [];
+    for (const item of held) {
+      if (item.origin === "lead" && item.state === "queued") this.armSelfWorkTimer(item);
+      if (item.origin === "boss" && !isTerminal(item.state)) {
+        if (item.state === "running" && !this.hasPendingChildren(item.id)) {
+          item.state = "queued";
+          item.assigneeId = null;
+        }
+        if (item.state === "queued") rootsToResume.push({ ...item });
+      }
+      item.updatedAt = this.now();
+      this.emitUpdate(item);
+    }
+    return { released: held.map((i) => ({ ...i })), rootsToResume };
+  }
+
+  /**
+   * CANCEL_WORK_ITEM: cancel an item no agent is working on yet.
+   * - Sub-task: only while queued (held or not), assigned or handing off.
+   * - Boss item: refused while the Lead is running it (`leadRunning`) or while one of
+   *   its sub-tasks is running; otherwise its sub-tasks that have not started are
+   *   cancelled and the Boss item is cancelled from whatever state it is in.
+   *   Delivered sub-tasks (in_review/done) are left as they are.
+   * Returns the ids of every item cancelled.
+   */
+  cancelPending(id: string, opts: { leadRunning?: boolean } = {}): { ok: true; cancelled: string[] } | { ok: false; error: string } {
+    const item = this.items.get(id);
+    if (!item) return { ok: false, error: "That work item no longer exists." };
+    if (isTerminal(item.state)) return { ok: false, error: `"${item.title}" is already ${item.state}.` };
+    const cancelled: string[] = [];
+    if (item.origin === "lead") {
+      if (!NOT_STARTED.has(item.state)) {
+        return { ok: false, error: `"${item.title}" has already started (${item.state.replace("_", " ")}); stop its agent instead.` };
+      }
+      this.cancelItem(item);
+      cancelled.push(item.id);
+    } else {
+      if (opts.leadRunning) return { ok: false, error: `The Team Lead is working on "${item.title}" right now; stop the team instead.` };
+      const children = this.childrenOf(id);
+      const busy = children.find((c) => c.state === "running");
+      if (busy) return { ok: false, error: `"${busy.title}" is already running; stop it before cancelling "${item.title}".` };
+      for (const child of children) {
+        if (NOT_STARTED.has(child.state)) {
+          this.cancelItem(child);
+          cancelled.push(child.id);
+        }
+      }
+      this.cancelItem(item);
+      cancelled.push(item.id);
+    }
+    this.prune();
+    this.schedulePump();
+    return { ok: true, cancelled };
   }
 
   /** Re-run a restored Boss item through the boss_to_lead hand-off. */
@@ -665,9 +753,15 @@ export class Dispatcher {
     return [...this.items.values()].filter((i) => i.parentId === rootId);
   }
 
+  /** A sub-task of this Boss item still needs a dev or is being worked on */
+  private hasPendingChildren(rootId: string): boolean {
+    return this.childrenOf(rootId).some((c) => c.state === "queued" || ACTIVE_STATES.has(c.state));
+  }
+
+  /** Sub-tasks waiting for a dev, in pool order (held items excluded) */
   private queuedItems(): WorkItem[] {
     return [...this.items.values()]
-      .filter((i) => i.state === "queued" && i.origin === "lead")
+      .filter((i) => i.state === "queued" && i.origin === "lead" && !i.held)
       .sort((a, b) => {
         if (a.priority !== b.priority) return a.priority === "urgent" ? -1 : 1;
         return this.seqOf(a) - this.seqOf(b);
@@ -701,13 +795,13 @@ export class Dispatcher {
 
   private armSelfWorkTimer(item: WorkItem): void {
     this.clearWaitTimer(item.id);
-    if (item.pinned || item.origin !== "lead") return;
+    if (item.pinned || item.origin !== "lead" || item.held) return;
     const cfg = this.leadPolicy();
     if (!canLeadSelfWork(cfg, this.flagsFor(item.id))) return;
     const waitMs = Math.max(0, cfg.waitMs);
     const timer = setTimeout(() => {
       this.waitTimers.delete(item.id);
-      if (this.destroyed || item.state !== "queued") return;
+      if (this.destroyed || item.state !== "queued" || item.held) return;
       this.waitExpired.add(item.id);
       this.pump();
     }, waitMs);
@@ -729,6 +823,7 @@ export class Dispatcher {
   }
 
   private cancelItem(item: WorkItem): void {
+    item.held = undefined;
     this.clearHandoffTimer(item.id);
     this.clearWaitTimer(item.id);
     this.forceState(item, "cancelled");

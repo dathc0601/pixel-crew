@@ -832,22 +832,48 @@ export class Orchestrator extends EventEmitter<OrchestratorEventMap> {
     return this.dispatcher.list();
   }
 
+  /** Work items paused after a daemon restart (RESUME_POOL starts them) */
+  heldCount(): number {
+    return this.dispatcher.heldCount();
+  }
+
   /**
    * Restore a saved pool after a restart (agents must already exist). Items that
-   * were running are queued again and dispatched; a Boss item with nothing left
-   * in the pool is handed to the Lead again.
+   * were running are queued again. By default nothing starts: every restored item
+   * that would start work is held (WorkItem.held) until resumePool(), so a restart
+   * never spends tokens on its own. `hold: false` resumes at once. Returns the
+   * number of held items.
    */
-  restoreWorkItems(saved: WorkItem[]): void {
-    if (!Array.isArray(saved) || saved.length === 0) return;
+  restoreWorkItems(saved: WorkItem[], opts: { hold?: boolean } = {}): number {
+    if (!Array.isArray(saved) || saved.length === 0) return 0;
+    const hold = opts.hold ?? true;
+    const { held } = this.dispatcher.restore(saved, { hold: true });
+    if (!hold) {
+      this.resumePool();
+      return 0;
+    }
+    return held;
+  }
+
+  /**
+   * RESUME_POOL: start the held work. Sub-tasks are tracked as delegations from the
+   * Lead again and go back into the pool; Boss items with nothing left in the pool
+   * are handed to the Lead again with a "daemon restarted" note. Returns how many
+   * items were resumed.
+   */
+  resumePool(): number {
+    const { released, rootsToResume } = this.dispatcher.releaseHeld();
+    if (released.length === 0) return 0;
     const leadId = this.agentManager.getTeamLead();
-    const { rootsToResume } = this.dispatcher.restore(saved);
     if (leadId) {
-      for (const item of this.dispatcher.list()) {
-        if (item.origin === "lead" && (item.state === "queued" || item.state === "running")) {
+      for (const item of released) {
+        if (item.origin === "lead" && item.state === "queued") {
           this.delegationRouter.adoptTask(item.id, item.fromAgentId ?? leadId);
         }
       }
-      if (this.dispatcher.hasActiveItems() || rootsToResume.length > 0) this.ensureExecutePhase(leadId);
+      this.ensureExecutePhase(leadId);
+      // New Boss work may have finalized while these were held
+      this.teamFinalized = false;
       for (const root of rootsToResume) {
         const done = this.dispatcher.list().filter((i) => i.parentId === root.id && (i.state === "done" || i.state === "in_review"));
         const note = done.length > 0
@@ -857,6 +883,31 @@ export class Orchestrator extends EventEmitter<OrchestratorEventMap> {
       }
     }
     this.dispatcher.pump();
+    return released.length;
+  }
+
+  /**
+   * CANCEL_WORK_ITEM: cancel a work item nobody is working on yet (queued, held,
+   * assigned, handing off). A Boss item also cancels its sub-tasks that have not
+   * started; it is refused while the Lead runs it or one of its sub-tasks runs.
+   */
+  cancelWorkItem(id: string): { ok: true } | { ok: false; error: string } {
+    const item = this.dispatcher.get(id);
+    let leadRunning = false;
+    if (item?.origin === "boss" && !item.held) {
+      const leadId = item.assigneeId ?? this.agentManager.getTeamLead();
+      const lead = leadId ? this.agentManager.get(leadId) : undefined;
+      leadRunning = !!lead && (lead.activeTaskId === id || lead.startingTaskId === id);
+    }
+    const res = this.dispatcher.cancelPending(id, { leadRunning });
+    if (!res.ok) return res;
+    if (item?.origin === "boss") {
+      // The Lead's run of it may still be waiting in its queue
+      const leadId = item.assigneeId ?? this.agentManager.getTeamLead();
+      if (leadId) this.agentManager.get(leadId)?.removeQueuedTask(id);
+    }
+    for (const cancelledId of res.cancelled) this.delegationRouter.dropTask(cancelledId);
+    return { ok: true };
   }
 
   private ensureExecutePhase(leadId: string): void {

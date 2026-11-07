@@ -257,8 +257,11 @@ export class AgentSession {
   private abortReason: RunEndReason | null = null;
   /** Between dequeueNext() and the delayed runTask() */
   private dequeuing = false;
+  private dequeuingTaskId: string | null = null;
   /** Task id of the run in progress (or waiting for approval) */
   get activeTaskId(): string | null { return this.currentTaskId; }
+  /** Task id taken off the queue that starts in a moment (dequeue delay) */
+  get startingTaskId(): string | null { return this.dequeuing ? this.dequeuingTaskId : null; }
   get isAwaitingApproval(): boolean { return this.awaitingSpawnApproval; }
   /** Busy for dispatch purposes: running, waiting for approval, or with queued work */
   get isBusy(): boolean {
@@ -1143,10 +1146,20 @@ export class AgentSession {
     if (this.taskQueue.length === 0) return;
     const next = this.taskQueue.shift()!;
     this.dequeuing = true;
+    this.dequeuingTaskId = next.taskId;
     setTimeout(() => {
       this.dequeuing = false;
+      this.dequeuingTaskId = null;
       this.runTask(next.taskId, next.prompt, next.repoPath, next.teamContext, false, next.phaseOverride);
     }, CONFIG.timing.dequeueDelayMs);
+  }
+
+  /** Drop a queued run that has not started yet. False if it is not in the queue. */
+  removeQueuedTask(taskId: string): boolean {
+    const index = this.taskQueue.findIndex((t) => t.taskId === taskId);
+    if (index < 0) return false;
+    this.taskQueue.splice(index, 1);
+    return true;
   }
 
   /**

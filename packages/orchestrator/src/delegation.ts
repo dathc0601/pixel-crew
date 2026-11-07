@@ -86,9 +86,19 @@ export class DelegationRouter {
     if (!this.tasks.has(taskId)) this.tasks.set(taskId, { origin: originAgentId, depth: 1 });
   }
 
-  /** Forget delegations whose results nobody will forward any more. */
+  /**
+   * Forget a delegation whose result will never come (the work item was cancelled).
+   * Results already waiting for it are forwarded now instead of after the safety timeout.
+   */
   dropTask(taskId: string): void {
+    const meta = this.tasks.get(taskId);
+    if (!meta) return;
     this.tasks.delete(taskId);
+    if (this.pendingResults.has(meta.origin) && !this.hasPendingFrom(meta.origin)) {
+      const pending = this.pendingResults.get(meta.origin)!;
+      clearTimeout(pending.timer);
+      this.flushResults(meta.origin);
+    }
   }
 
   /**

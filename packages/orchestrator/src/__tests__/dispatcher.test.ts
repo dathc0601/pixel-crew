@@ -49,6 +49,14 @@ function stateOf(d: Dispatcher, id: string): string | undefined {
   return d.get(id)?.state;
 }
 
+/** A saved sub-task as it would come out of team-state.json */
+function enqueueSpecItem(id: string): WorkItem {
+  return {
+    id, parentId: null, origin: "lead", title: id, prompt: `do ${id}`, priority: "normal", preferredAgentId: null, pinned: false,
+    state: "queued", assigneeId: null, attempts: 1, createdAt: 0, updatedAt: 0, heartbeatAt: null, fromAgentId: "lead",
+  };
+}
+
 function enqueue(d: Dispatcher, id: string, extra: Partial<Parameters<Dispatcher["enqueue"]>[0]> = {}) {
   return d.enqueue({ id, parentId: null, prompt: `do ${id}`, fromAgentId: "lead", ...extra });
 }
@@ -225,11 +233,41 @@ describe("Dispatcher: zombie re-queue", () => {
 
     const host2 = makeHost(["Ann"]);
     d = new Dispatcher(host2, { handoffDurationMs: () => 0 });
-    d.restore(saved);
+    assert.equal(d.restore(saved).held, 2);
     assert.equal(stateOf(d, "t1"), "queued");
     assert.equal(d.get("t1")?.attempts, 1, "the interrupted attempt still counts");
     d.pump(); await flush();
+    assert.equal(host2.started.length, 0, "held items never start");
+    assert.equal(d.queuedCount(), 0);
+    assert.equal(d.hasActiveItems(), false);
+    assert.equal(d.releaseHeld().released.length, 2);
+    d.pump(); await flush();
     assert.deepEqual(host2.started.map((s) => s.itemId), ["t1"]);
+  });
+
+  it("restore with hold: false dispatches at once", async () => {
+    const host = makeHost(["Ann"]);
+    d = new Dispatcher(host, { handoffDurationMs: () => 0 });
+    const saved = [{ ...enqueueSpecItem("t1"), state: "running" as const, assigneeId: "ann" }];
+    assert.equal(d.restore(saved, { hold: false }).held, 0);
+    d.pump(); await flush();
+    assert.deepEqual(host.started.map((s) => s.itemId), ["t1"]);
+  });
+
+  it("cancelPending: queued or handing-off items only; a Boss item takes its unstarted sub-tasks along", async () => {
+    const host = makeHost(["Ann"]);
+    d = new Dispatcher(host, { handoffDurationMs: () => 10_000 });
+    const root = d.assignToLead({ prompt: "boss", flags: { urgent: false }, leadId: "lead" }, () => {});
+    enqueue(d, "t1", { parentId: root.id });
+    enqueue(d, "t2", { parentId: root.id });
+    assert.equal(stateOf(d, "t1"), "handing_off");
+    assert.equal(stateOf(d, "t2"), "queued");
+    assert.equal(d.cancelPending(root.id, { leadRunning: true }).ok, false, "refused while the Lead runs it");
+    assert.deepEqual(d.cancelPending("t2"), { ok: true, cancelled: ["t2"] });
+    assert.deepEqual(d.cancelPending(root.id), { ok: true, cancelled: ["t1", root.id] });
+    assert.equal(d.cancelPending("t1").ok, false, "already cancelled");
+    await flush();
+    assert.equal(host.started.length, 0, "the cancelled hand-off never arrives");
   });
 });
 

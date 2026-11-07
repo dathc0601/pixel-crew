@@ -46,6 +46,11 @@ export interface WorkItem {
   updatedAt: number;
   heartbeatAt: number | null;
   selfWork?: boolean;
+  /**
+   * Restored after a daemon restart and paused: the Dispatcher never starts it (and
+   * nothing spends tokens on it) until Orchestrator.resumePool(), or it is cancelled.
+   */
+  held?: boolean;
   flags?: BossTaskFlags;
   error?: string;
   /** Who put the item in the pool (the Lead); daemon-internal */

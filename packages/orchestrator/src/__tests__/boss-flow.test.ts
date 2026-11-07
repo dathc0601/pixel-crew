@@ -135,32 +135,136 @@ describe("Boss flow with the fake backend", () => {
     assert.deepEqual(results.map((r) => (r as { success: boolean }).success), [true], "the Lead only saw the successful retry");
   });
 
-  it("restart resumes the queue: running items are queued again and finish", async () => {
-    const slow = harness([
-      { match: "The Boss assigned you a task", text: ["TASK: job one", "TASK: job two"] },
-      dev("Ann", { delayMs: 20_000 }),
-    ]);
-    hireTeam(slow, ["Ann"]);
-    slow.orc.bossAssign({ prompt: "Two jobs", urgent: false });
-    await slow.waitFor((e): e is TaskStartedEvent => e.type === "task:started" && e.agentId === "dev-ann");
-    const saved = slow.orc.getWorkItems();
-    assert.deepEqual(saved.filter((i) => i.origin === "lead").map((i) => i.state), ["running", "queued"]);
-    slow.destroy();
-    hs = hs.filter((x) => x !== slow);
-
-    // "Daemon restart": a fresh orchestrator with the same agents and the saved pool
-    const h = harness([leadFinal, dev("Ann")]);
+  /** Run `rules` until `ready`, snapshot the pool, then drop that orchestrator ("daemon stops"). */
+  async function poolAt(rules: ScenarioRule[], start: (h: Harness) => void, ready: (e: OrchestratorEvent) => boolean): Promise<WorkItem[]> {
+    const before = harness(rules);
+    hireTeam(before, ["Ann"]);
+    start(before);
+    await before.waitFor(ready);
+    const saved = before.orc.getWorkItems();
+    before.destroy();
+    hs = hs.filter((x) => x !== before);
+    return saved;
+  }
+  const annStarted = (e: OrchestratorEvent): e is TaskStartedEvent => e.type === "task:started" && e.agentId === "dev-ann";
+  /** Two sub-tasks: job one running on Ann, job two queued */
+  const twoJobsPool = () => poolAt(
+    [{ match: "The Boss assigned you a task", text: ["TASK: job one", "TASK: job two"] }, dev("Ann", { delayMs: 20_000 })],
+    (h) => { h.orc.bossAssign({ prompt: "Two jobs", urgent: false }); },
+    annStarted,
+  );
+  /** "Daemon restart": a fresh orchestrator with the same agents, then the saved pool */
+  function restarted(rules: ScenarioRule[], saved: WorkItem[]): { h: Harness; held: number } {
+    const h = harness(rules);
     hireTeam(h, ["Ann"]);
     h.orc.setTeamPhase("team-t", "complete", LEAD); // the gateway restores execute as complete
-    h.orc.restoreWorkItems(saved);
+    return { h, held: h.orc.restoreWorkItems(saved) };
+  }
+
+  it("after a restart nothing starts: restored items are held", async () => {
+    const saved = await twoJobsPool();
+    assert.deepEqual(saved.filter((i) => i.origin === "lead").map((i) => i.state), ["running", "queued"]);
+    const { h, held } = restarted([leadFinal, dev("Ann")], saved);
+    assert.equal(held, 3, "both sub-tasks and the Boss item");
+    await sleep(400);
+    assert.equal(h.events.filter((e) => e.type === "task:started" || e.type === "handoff" || e.type === "lead:self-work").length, 0);
+    assert.equal(h.records().length, 0, "no agent process ran");
+    const items = h.orc.getWorkItems();
+    assert.ok(items.every((i) => i.held === true), "every restored item is held");
+    assert.deepEqual(items.map((i) => i.state), ["running", "queued", "queued"], "Boss item held by the Lead, both jobs queued");
+    assert.equal(h.orc.heldCount(), 3);
+    assert.equal(h.orc.getTeamPhase(LEAD), "complete", "the phase is not pushed back to execute");
+  });
+
+  it("restart resumes the queue on RESUME_POOL: running items are queued again and finish", async () => {
+    const saved = await twoJobsPool();
+    const { h } = restarted([leadFinal, dev("Ann")], saved);
     const jobOne = saved.find((i) => i.origin === "lead")!;
     assert.equal(itemUpdates(h).find((e) => e.item.id === jobOne.id)?.item.state, "queued", "restored as queued, not running");
+    assert.equal(h.orc.resumePool(), 3);
+    assert.equal(h.orc.heldCount(), 0);
+    assert.equal(h.orc.resumePool(), 0, "nothing left to resume");
     await h.waitFor(isFinal, 9000);
     const items = h.orc.getWorkItems();
     assert.deepEqual(items.filter((i) => i.origin === "lead").map((i) => i.state), ["done", "done"]);
     assert.equal(items.find((i) => i.origin === "boss")?.state, "done");
+    assert.ok(items.every((i) => !i.held));
     assert.ok(itemUpdates(h).some((e) => e.item.id === jobOne.id && e.item.state === "queued"), "job one was re-queued");
     assert.equal(started(h).length, 2);
+  });
+
+  it("new Boss work runs and finalizes while restored items stay held, then RESUME_POOL finishes them", async () => {
+    const saved = await twoJobsPool();
+    const { h } = restarted([leadFinal, { match: "NEW task", text: "TASK: new job" }, dev("Ann")], saved);
+    const res = h.orc.bossAssign({ prompt: "NEW task", urgent: false });
+    assert.ok(res.ok);
+    await h.waitFor(isFinal, 9000);
+    let items = h.orc.getWorkItems();
+    assert.equal(items.find((i) => i.id === res.item.id)?.state, "done", "the new Boss item finished");
+    assert.deepEqual(started(h).map((s) => s.prompt.split("\n").pop()), ["new job"], "only the new sub-task ran");
+    const old = items.filter((i) => saved.some((s) => s.id === i.id));
+    assert.deepEqual(old.map((i) => [i.state, i.held]), [["running", true], ["queued", true], ["queued", true]], "the old items are untouched");
+    const newJob = items.find((i) => i.parentId === res.item.id)!;
+    assert.equal(newJob.state, "done");
+    assert.equal(newJob.held, undefined);
+
+    assert.equal(h.orc.resumePool(), 3);
+    await h.waitFor(() => h.events.filter(isFinal).length >= 2, 9000);
+    items = h.orc.getWorkItems();
+    assert.ok(items.every((i) => i.state === "done"), `all done: ${items.map((i) => i.state).join(",")}`);
+    assert.equal(started(h).length, 3);
+  });
+
+  it("a held Boss item with nothing in the pool goes back to the Lead on RESUME_POOL", async () => {
+    const saved = await poolAt(
+      [{ match: "The Boss assigned you a task", text: "thinking", delayMs: 20_000 }],
+      (h) => { h.orc.bossAssign({ prompt: "Plan it", urgent: false }); },
+      (e) => e.type === "task:started" && e.agentId === LEAD,
+    );
+    const { h, held } = restarted([{ match: "daemon restarted", text: "Nothing to delegate.", delayMs: 400 }], saved);
+    assert.equal(held, 1);
+    assert.equal(h.orc.getWorkItems()[0].state, "queued");
+    await sleep(300);
+    assert.equal(h.records().length, 0, "the Lead did not run before RESUME_POOL");
+
+    assert.equal(h.orc.resumePool(), 1);
+    const leadRun = await h.waitFor((e): e is TaskStartedEvent => e.type === "task:started" && e.agentId === LEAD);
+    assert.equal(leadRun.taskId, saved[0].id);
+    const refused = h.orc.cancelWorkItem(saved[0].id);
+    assert.equal(refused.ok, false, "cannot cancel a Boss item the Lead is running");
+    await h.waitFor((e): e is WorkItemUpdatedEvent => e.type === "work:updated" && e.item.id === saved[0].id && e.item.state === "done");
+    assert.equal(h.orc.getTeamPhase(LEAD), "complete");
+  });
+
+  it("CANCEL_WORK_ITEM cancels held sub-tasks and Boss items, and refuses running work", async () => {
+    const saved = await twoJobsPool();
+    const [root, jobOne, jobTwo] = saved;
+
+    // Held Boss item: it and both held sub-tasks are cancelled; nothing ever starts
+    const a = restarted([leadFinal, dev("Ann")], saved).h;
+    assert.deepEqual(a.orc.cancelWorkItem(root.id), { ok: true });
+    assert.deepEqual(a.orc.getWorkItems().map((i) => [i.state, i.held]), [["cancelled", undefined], ["cancelled", undefined], ["cancelled", undefined]]);
+    assert.equal(a.orc.resumePool(), 0);
+    assert.equal(a.orc.cancelWorkItem(root.id).ok, false, "already cancelled");
+    assert.equal(a.orc.cancelWorkItem("nope").ok, false, "unknown id");
+    await sleep(300);
+    assert.equal(a.records().length, 0);
+    a.destroy();
+    hs = hs.filter((x) => x !== a);
+
+    // Held sub-task: only it is cancelled; the rest resumes, and running work is refused
+    const b = restarted([leadFinal, dev("Ann", { delayMs: 20_000 })], saved).h;
+    assert.deepEqual(b.orc.cancelWorkItem(jobTwo.id), { ok: true });
+    const two = b.orc.getWorkItems().find((i) => i.id === jobTwo.id)!;
+    assert.deepEqual([two.state, two.held], ["cancelled", undefined]);
+    assert.ok(itemUpdates(b).some((e) => e.item.id === jobTwo.id && e.item.state === "cancelled"), "the cancel was broadcast");
+    assert.equal(b.orc.resumePool(), 2);
+    const run = await b.waitFor(annStarted);
+    assert.equal(run.taskId, jobOne.id);
+    const busy = b.orc.cancelWorkItem(jobOne.id);
+    assert.equal(busy.ok, false, "a running sub-task cannot be cancelled");
+    assert.equal(b.orc.cancelWorkItem(root.id).ok, false, "nor a Boss item with a running sub-task");
+    assert.equal(b.orc.getWorkItems().find((i) => i.id === root.id)?.state, "running");
   });
 
   it("the Boss hand-off delays the Lead's start by durationMs", async () => {
