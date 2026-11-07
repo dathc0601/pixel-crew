@@ -44,6 +44,8 @@ const nextConfig: NextConfig = {
   // Lint runs once for the whole repo (root eslint.config.mjs, `pnpm lint`), not inside next build
   eslint: { ignoreDuringBuilds: true },
   reactStrictMode: true,
+  // `PIXEL_CREW_SOURCE_MAPS=1 pnpm --filter web build` emits browser source maps for bundle analysis
+  productionBrowserSourceMaps: process.env.PIXEL_CREW_SOURCE_MAPS === "1",
   transpilePackages: ["@pixel-crew/shared"],
   output: isDev ? undefined : "export",
   ...(isDev && {

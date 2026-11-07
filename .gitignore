@@ -12,6 +12,7 @@ demo.mp4
 demo1.mp4
 apps/web/out
 apps/web/public/sw.js
+apps/web/public/sw.js.map
 apps/web/tsconfig.tsbuildinfo
 docs
 .env
@@ -26,5 +27,6 @@ node_modules/
 /.next/
 apps/gateway/dist/
 apps/web/public/workbox-*.js
+apps/web/public/workbox-*.js.map
 apps/web/public/swe-worker-*.js
 *.tsbuildinfo
