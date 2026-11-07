@@ -7,6 +7,7 @@
     "dev:web": "pnpm --filter web dev",
     "dev:gateway": "pnpm --filter pixel-crew dev",
     "dev:demo": "pnpm --filter pixel-crew dev:demo",
+    "demo": "node scripts/demo.mjs",
     "start": "pnpm --filter web build && pnpm --filter pixel-crew start",
     "build": "pnpm -r build",
     "build:release": "pnpm --filter web build && pnpm --filter pixel-crew build",
