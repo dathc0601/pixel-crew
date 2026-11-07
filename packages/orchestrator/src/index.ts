@@ -23,6 +23,8 @@ export { syncAgentDefs } from "./agent-defs.js";
 export { resolveSpawnPermission } from "./permissions.js";
 export type { PermissionPolicy, SpawnPermission, SpawnPermissionMode } from "./permissions.js";
 export { getDataDir } from "./paths.js";
+export { createFakeBackend, FAKE_AGENT_SCRIPT } from "./testing/fake-backend.js";
+export type { FakeBackendOptions } from "./testing/fake-backend.js";
 export type { TeamPhaseInfo } from "./phase-machine.js";
 export type {
   AgentStatus,

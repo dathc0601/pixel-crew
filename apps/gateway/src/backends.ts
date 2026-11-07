@@ -1,6 +1,7 @@
 import { execSync } from "child_process";
 import { existsSync } from "fs";
-import type { AIBackend } from "@pixel-crew/orchestrator";
+import path from "path";
+import { createFakeBackend, type AIBackend } from "@pixel-crew/orchestrator";
 
 // Claude Code refuses --dangerously-skip-permissions as root. Running as root at all
 // requires --allow-root (see root-guard.ts); bypass then degrades to auto mode.
@@ -189,6 +190,17 @@ const backends: AIBackend[] = [
     },
   },
 ];
+
+// Fake backend (scripted stream-json, no model calls) for demos and manual testing from source:
+//   PIXEL_CREW_FAKE_SCENARIO=path/to/scenario.json pnpm dev:gateway   (format: fake-agent.mjs header)
+if (process.env.PIXEL_CREW_FAKE_SCENARIO) {
+  const fake = createFakeBackend({ scenarioFile: path.resolve(process.env.PIXEL_CREW_FAKE_SCENARIO) });
+  if (existsSync(fake.buildArgs("", {})[0])) {
+    backends.push(fake);
+  } else {
+    console.warn("[backends] PIXEL_CREW_FAKE_SCENARIO is set but fake-agent.mjs was not found (run from source)");
+  }
+}
 
 const backendMap = new Map<string, AIBackend>(backends.map((b) => [b.id, b]));
 
