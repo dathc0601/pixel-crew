@@ -2,7 +2,7 @@
 // completely for a hidden tab or an off-screen canvas.
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { startGameLoop, type LoopEnv } from '../gameLoop'
+import { deviceMaxFps, MAX_FPS, MOBILE_MAX_FPS, startGameLoop, type LoopEnv } from '../gameLoop'
 
 /** A 60 Hz display with timers on the same virtual clock. */
 function fakeEnv() {
@@ -154,4 +154,13 @@ describe('game loop scheduling', () => {
       loop.stop()
     })
   }
+})
+
+describe("deviceMaxFps (P5.3: reduced FPS on phones)", () => {
+  it("caps touch-first screens and save-data at 15 fps, everything else at 30", () => {
+    assert.equal(deviceMaxFps(() => false), MAX_FPS)
+    assert.equal(deviceMaxFps((q) => q.includes("pointer: coarse")), MOBILE_MAX_FPS)
+    assert.equal(deviceMaxFps((q) => q.includes("reduced-data")), MOBILE_MAX_FPS)
+    assert.equal(MOBILE_MAX_FPS, 15)
+  })
 })

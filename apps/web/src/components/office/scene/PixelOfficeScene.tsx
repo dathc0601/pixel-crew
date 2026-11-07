@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useCallback, useState } from "react";
 import { OfficeState } from "../engine/officeState";
-import { startGameLoop } from "../engine/gameLoop";
+import { deviceMaxFps, startGameLoop } from "../engine/gameLoop";
 import { renderFrame } from "../engine/renderer";
 import type { EditorRenderState } from "../engine/renderer";
 import { EditTool } from "../types";
@@ -323,7 +323,7 @@ export default function PixelOfficeScene({
         lastOffsetsRef.current = result;
         editorRenderRef.current = editorRenderState ?? null;
       },
-    });
+    }, { maxFps: deviceMaxFps() });
 
     // Store wake for mouse/pointer handlers and officeState notifications
     const { stop, wake } = loop;

@@ -6,6 +6,20 @@ const IDLE_THRESHOLD = 10
 /** Frame cap while something moves (walks, spawn effects); sprites animate at 6-8 fps anyway */
 export const MAX_FPS = 30
 
+/** Phones and tablets (§9 budget: 15 fps on mobile / battery saver) */
+export const MOBILE_MAX_FPS = 15
+
+/**
+ * Frame cap for this device: 15 fps on touch-first screens (coarse pointer, no hover) or
+ * when the user asked to save data; 30 fps otherwise. Walk speed is time-based, so a lower
+ * cap only makes motion a little steppier.
+ */
+export function deviceMaxFps(matches: (query: string) => boolean = (q) => typeof window !== 'undefined' && !!window.matchMedia?.(q).matches): number {
+  if (matches('(pointer: coarse) and (hover: none)')) return MOBILE_MAX_FPS
+  if (matches('(prefers-reduced-data: reduce)')) return MOBILE_MAX_FPS
+  return MAX_FPS
+}
+
 /** A vsync this much early still counts as on time (60 Hz frames are 16.7 ms apart) */
 const FRAME_SLACK_MS = 4
 
