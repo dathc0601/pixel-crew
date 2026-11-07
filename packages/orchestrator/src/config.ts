@@ -36,6 +36,15 @@ export const CONFIG = {
     retryDelayMs: 500,
   },
 
+  dispatch: {
+    /** Runs per work item before a zombie item fails and is escalated to the Lead */
+    maxAttempts: 2,
+    /** A running item with no agent output for this long is treated as a zombie (ms) */
+    heartbeatTimeoutMs: 10 * 60 * 1000,
+    /** Hand-off duration when the host does not pass one (office.handoff.durationMs default) */
+    defaultHandoffMs: 2500,
+  },
+
   limits: {
     /** Max chars for team chat messages (results, delegations, completions) */
     chatMessageChars: 2000,

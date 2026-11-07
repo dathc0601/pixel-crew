@@ -42,7 +42,9 @@ export function createFakeBackend(opts: FakeBackendOptions): AIBackend {
       if (o.permissionMode === "bypass") args.push("--dangerously-skip-permissions");
       else if (o.permissionMode === "auto") args.push("--permission-mode", "auto");
       if (o.resumeSessionId && !o.skipResume) args.push("--resume", o.resumeSessionId);
-      if (o.noTools) args.push("--tools", "");
+      if (o.tools) args.push("--tools", o.tools.join(","));
+      else if (o.noTools) args.push("--tools", "");
+      if (o.disallowedTools?.length) args.push("--disallowedTools", o.disallowedTools.join(","));
       if (o.model) args.push("--model", o.model);
       args.push("-p", prompt);
       return args;

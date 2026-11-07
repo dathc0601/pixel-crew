@@ -12,11 +12,22 @@ import { PhaseMachine } from "./phase-machine.js";
 import { finalizeTeamResult } from "./result-finalizer.js";
 import { recordReviewFeedback, recordProjectCompletion, recordTechPreference, getMemoryContext } from "./memory.js";
 import { createWorktree, getManagedWorktreeBranch, mergeWorktree, removeWorktree, revertWorktreeCommit, worktreeHasPendingChanges, syncWorktreeToMain, undoMergeCommit, resetWorktreeToMain, isGitRepo, initGitRepo } from "./worktree.js";
+import { Dispatcher } from "./dispatcher.js";
+import {
+  canLeadUseSubagents,
+  DEFAULT_LEAD_POLICY,
+  NO_BOSS_FLAGS,
+  SUBAGENT_TOOL_NAMES,
+  type LeadPolicyConfig,
+  type LeadRunPolicy,
+} from "./lead-policy.js";
+import type { BossTaskFlags, WorkItem } from "./work-item.js";
 import type { AIBackend } from "./ai-backend.js";
 import type { PermissionPolicy } from "./permissions.js";
 import type { TeamPreview } from "./result-finalizer.js";
 import type {
   OrchestratorOptions,
+  BossAssignInput,
   CreateAgentOpts,
   CreateTeamOpts,
   RunTaskOpts,
@@ -63,6 +74,9 @@ export class Orchestrator extends EventEmitter<OrchestratorEventMap> {
   private teamChangedFiles = new Set<string>();
   /** Guard against emitting isFinalResult more than once per execute cycle. */
   private teamFinalized = false;
+  /** Shared work pool + hand-off timing (Phase 1) */
+  private dispatcher: Dispatcher;
+  private leadPolicy: () => LeadPolicyConfig;
 
   constructor(opts: OrchestratorOptions) {
     super();
@@ -97,6 +111,32 @@ export class Orchestrator extends EventEmitter<OrchestratorEventMap> {
       (e) => this.emitEvent(e),
       (agentId, taskId, repoPath) => this.setupWorktreeForAgent(agentId, taskId, repoPath),
     );
+
+    // Dispatcher: Lead → dev work goes through the shared pool
+    this.leadPolicy = opts.leadPolicy ?? (() => DEFAULT_LEAD_POLICY);
+    this.dispatcher = new Dispatcher({
+      devs: () => this.agentManager.getAll()
+        .filter((s) => !!s.teamId && !this.agentManager.isTeamLead(s.agentId) && !s.role.toLowerCase().includes("review"))
+        .map((s) => ({ agentId: s.agentId, name: s.name, role: s.role, busy: s.isBusy })),
+      leadId: () => this.agentManager.getTeamLead(),
+      hasReviewer: () => this.agentManager.getAll().some((s) => !!s.teamId && s.role.toLowerCase().includes("review")),
+      startOnDev: (item, agentId) => this.delegationRouter.startDispatched(item, agentId),
+      startOnLead: (item, leadId) => this.delegationRouter.startSelfWork(item, leadId),
+      abortRun: (agentId, itemId) => {
+        const s = this.agentManager.get(agentId);
+        if (!s) return "gone";
+        if (s.activeTaskId !== itemId || s.isAwaitingApproval) return s.activeTaskId === null && !s.isBusy ? "gone" : "waiting";
+        return s.abortRun("heartbeat_timeout") ? "aborted" : "gone";
+      },
+      forwardFailure: (item, summary) => this.delegationRouter.forwardDispatchFailure(item, summary),
+      emit: (e) => this.emitEvent(e),
+    }, {
+      handoffDurationMs: opts.handoffDurationMs,
+      leadPolicy: this.leadPolicy,
+      maxAttempts: opts.dispatch?.maxAttempts,
+      heartbeatTimeoutMs: opts.dispatch?.heartbeatTimeoutMs,
+    });
+    this.delegationRouter.setDispatcher(this.dispatcher);
 
     // Retry
     if (opts.retry === false) {
@@ -138,6 +178,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEventMap> {
       renderPrompt: (name, vars) => this.promptEngine.render(name, vars),
     });
     session.palette = opts.palette;
+    session.leadRunPolicy = (taskId) => this.resolveLeadRunPolicy(taskId);
+    session.onToolUse = (agentId, taskId, toolName, input) => this.handleToolUse(agentId, taskId, toolName, input);
 
     this.agentManager.add(session);
     this.delegationRouter.wireAgent(session);
@@ -159,6 +201,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEventMap> {
       agentId: opts.agentId,
       status: "idle",
     });
+    this.dispatcher.poke();
   }
 
   removeAgent(agentId: string): void {
@@ -169,6 +212,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEventMap> {
       session.worktreePath = null;
       session.worktreeBranch = null;
     }
+    // Its pooled work goes back to the queue for someone else
+    this.dispatcher.releaseAgent(agentId);
     this.cancelTask(agentId);
     this.delegationRouter.clearAgent(agentId);
     this.agentManager.delete(agentId);
@@ -243,12 +288,15 @@ export class Orchestrator extends EventEmitter<OrchestratorEventMap> {
       if (!session.originalTask || !opts?.phaseOverride || (opts.phaseOverride !== "execute" && opts.phaseOverride !== "design" && opts.phaseOverride !== "complete")) {
         session.originalTask = prompt;
       }
-      // Preserve team project dir across execute cycles (set by gateway before runTask)
-      const savedProjectDir = this.delegationRouter.getTeamProjectDir();
-      this.delegationRouter.clearAll();
-      if (savedProjectDir) this.delegationRouter.setTeamProjectDir(savedProjectDir);
-      this.teamPreview = null;
-      this.teamChangedFiles.clear();
+      // Keep delegation state while pooled work is still in flight (e.g. a second Boss task)
+      if (!this.dispatcher.hasActiveItems()) {
+        // Preserve team project dir across execute cycles (set by gateway before runTask)
+        const savedProjectDir = this.delegationRouter.getTeamProjectDir();
+        this.delegationRouter.clearAll();
+        if (savedProjectDir) this.delegationRouter.setTeamProjectDir(savedProjectDir);
+        this.teamPreview = null;
+        this.teamChangedFiles.clear();
+      }
       this.teamFinalized = false;
     }
 
@@ -432,6 +480,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEventMap> {
    */
   stopTeam(): void {
     this.delegationRouter.stop();
+    this.dispatcher.cancelAll();
     const teamAgents = this.agentManager.getAll().filter(a => !!a.teamId);
     for (const agent of teamAgents) {
       this.cancelTask(agent.agentId);
@@ -450,6 +499,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEventMap> {
    */
   fireTeam(): void {
     this.delegationRouter.stop();
+    this.dispatcher.reset();
     const teamAgents = this.agentManager.getAll().filter(a => !!a.teamId);
     for (const agent of teamAgents) {
       this.removeAgent(agent.agentId);
@@ -749,9 +799,127 @@ export class Orchestrator extends EventEmitter<OrchestratorEventMap> {
     }
 
     this.delegationRouter.clearAll();
+    this.dispatcher.cancelAll();
     this.teamPreview = null;
     this.teamChangedFiles.clear();
     this.teamFinalized = false;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Boss flow + work pool (Phase 1)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * The Boss hands a task to the Team Lead: a boss_to_lead hand-off, then the Lead
+   * runs (in the execute phase) after the hand-off duration.
+   */
+  bossAssign(input: BossAssignInput): { ok: true; item: WorkItem } | { ok: false; error: string } {
+    const leadId = this.agentManager.getTeamLead();
+    const lead = leadId ? this.agentManager.get(leadId) : undefined;
+    if (!leadId || !lead) return { ok: false, error: "There is no Team Lead yet. Hire a team first." };
+    const flags: BossTaskFlags = {
+      urgent: input.urgent,
+      ...(input.allowLeadSelfWork !== undefined ? { allowLeadSelfWork: input.allowLeadSelfWork } : {}),
+      ...(input.allowSubagents !== undefined ? { allowSubagents: input.allowSubagents } : {}),
+    };
+    this.ensureExecutePhase(leadId);
+    const item = this.dispatcher.assignToLead({ prompt: input.prompt, flags, leadId }, (arrived) => this.startBossItemOnLead(arrived, leadId));
+    return { ok: true, item };
+  }
+
+  /** Every work item (copies, oldest first) */
+  getWorkItems(): WorkItem[] {
+    return this.dispatcher.list();
+  }
+
+  /**
+   * Restore a saved pool after a restart (agents must already exist). Items that
+   * were running are queued again and dispatched; a Boss item with nothing left
+   * in the pool is handed to the Lead again.
+   */
+  restoreWorkItems(saved: WorkItem[]): void {
+    if (!Array.isArray(saved) || saved.length === 0) return;
+    const leadId = this.agentManager.getTeamLead();
+    const { rootsToResume } = this.dispatcher.restore(saved);
+    if (leadId) {
+      for (const item of this.dispatcher.list()) {
+        if (item.origin === "lead" && (item.state === "queued" || item.state === "running")) {
+          this.delegationRouter.adoptTask(item.id, item.fromAgentId ?? leadId);
+        }
+      }
+      if (this.dispatcher.hasActiveItems() || rootsToResume.length > 0) this.ensureExecutePhase(leadId);
+      for (const root of rootsToResume) {
+        const done = this.dispatcher.list().filter((i) => i.parentId === root.id && (i.state === "done" || i.state === "in_review"));
+        const note = done.length > 0
+          ? `[The daemon restarted while you were on this task. Already delivered: ${done.map((d) => d.title).join("; ")}. Only delegate what is still missing.]`
+          : "[The daemon restarted while you were on this task. Start it again.]";
+        this.dispatcher.resumeRoot(root.id, leadId, (arrived) => this.startBossItemOnLead(arrived, leadId, note));
+      }
+    }
+    this.dispatcher.pump();
+  }
+
+  private ensureExecutePhase(leadId: string): void {
+    const info = this.phaseMachine.getPhaseForLeader(leadId);
+    if (info?.phase === "execute") return;
+    const teamId = info?.teamId ?? this.agentManager.get(leadId)?.teamId ?? `team-${leadId}`;
+    this.setTeamPhase(teamId, "execute", leadId);
+  }
+
+  private startBossItemOnLead(item: WorkItem, leadId: string, note?: string): void {
+    const lead = this.agentManager.get(leadId);
+    if (!lead) {
+      this.dispatcher.finishRoot(item.id, false, "The Team Lead left the team");
+      return;
+    }
+    // Context for result rounds: every Boss task still open
+    lead.originalTask = this.dispatcher.activeRoots().map((r) => r.prompt).join("\n\n---\n\n") || item.prompt;
+    const flags = item.flags ?? NO_BOSS_FLAGS;
+    const prompt = [
+      `The Boss assigned you a task${flags.urgent ? " (URGENT)" : ""}:`,
+      item.prompt,
+      note ?? "",
+      "Split it into sub-tasks for your developers, one per line:",
+      "- TASK: <description>  (any idle developer takes it)",
+      "- TASK[skill]: <description>  (prefers a developer with that skill)",
+      "- @Name: <description>  (prefers Name; an idle teammate takes it if Name is busy)",
+      "- @Name!: <description>  (only Name may do it; it waits until Name is free)",
+      "Independent sub-tasks run in parallel. When no developer is free the work waits in the queue; you do not do it yourself.",
+    ].filter(Boolean).join("\n");
+    this.runTask(leadId, item.id, prompt, { phaseOverride: "execute" });
+  }
+
+  /** Tools for one Lead run, decided by the daemon (never by the prompt). */
+  private resolveLeadRunPolicy(taskId: string): LeadRunPolicy {
+    const cfg = this.leadPolicy();
+    const ctx = { allDevsBusy: this.dispatcher.allDevsBusy(), queuedCount: this.dispatcher.queuedCount() };
+    if (this.dispatcher.isSelfWorkRun(taskId)) {
+      return { selfWork: true, subagents: canLeadUseSubagents(cfg, this.dispatcher.flagsFor(taskId), ctx) };
+    }
+    const own = this.dispatcher.get(taskId);
+    const root = own?.origin === "boss" ? own : this.dispatcher.currentRoot();
+    const subagents = canLeadUseSubagents(cfg, root?.flags ?? NO_BOSS_FLAGS, ctx);
+    return {
+      selfWork: false,
+      subagents,
+      promptNote: subagents
+        ? `[Daemon policy] All developers are busy and ${ctx.queuedCount} sub-task(s) are waiting. For this turn you may use the Agent tool to run subagents on independent work; keep delegating the rest.`
+        : undefined,
+    };
+  }
+
+  private handleToolUse(agentId: string, taskId: string, toolName: string, input: Record<string, unknown> | undefined): void {
+    if (!this.agentManager.isTeamLead(agentId) || !SUBAGENT_TOOL_NAMES.includes(toolName)) return;
+    const own = this.dispatcher.get(taskId);
+    const root = own?.origin === "boss" ? own : own?.parentId ? this.dispatcher.get(own.parentId) : this.dispatcher.currentRoot();
+    const text = typeof input?.description === "string" ? input.description : typeof input?.prompt === "string" ? input.prompt : "";
+    this.emitEvent({
+      type: "lead:subagent-started",
+      leadId: agentId,
+      workItemId: root?.id ?? null,
+      description: text.slice(0, 200),
+      subagentType: typeof input?.subagent_type === "string" ? input.subagent_type : undefined,
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -833,6 +1001,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEventMap> {
   // ---------------------------------------------------------------------------
 
   destroy(): void {
+    this.dispatcher.destroy();
     for (const agent of this.agentManager.getAll()) {
       agent.destroy();
     }
@@ -851,6 +1020,13 @@ export class Orchestrator extends EventEmitter<OrchestratorEventMap> {
   }
 
   private _handleSessionEventUnsafe(event: OrchestratorEvent, agentId: string): void {
+    // Any output is a heartbeat for the agent's pooled item; a run ending may free a dev
+    if (event.type === "log:append" || event.type === "log:activity" || event.type === "token:update" || event.type === "task:started") {
+      this.dispatcher.heartbeat(agentId);
+    } else if (event.type === "agent:status" || event.type === "task:done" || event.type === "task:failed") {
+      this.dispatcher.poke();
+    }
+
     // Handle retry logic on task failure (skip if timeout — retrying won't help)
     if (event.type === "task:failed" && this.retryTracker) {
       const taskId = event.taskId;
@@ -1034,7 +1210,10 @@ export class Orchestrator extends EventEmitter<OrchestratorEventMap> {
         if (hasWorkingWorkers && !budgetForced) {
           console.log(`[Orchestrator] Deferring finalization — workers still running`);
         }
-        const shouldFinalize = (leaderDidNotDelegateNewWork || budgetForced) && !this.teamFinalized && (!hasWorkingWorkers || budgetForced);
+        // Pooled work still queued or handing off also defers finalization
+        const poolBusy = this.dispatcher.hasActiveItems();
+        const shouldFinalize = (leaderDidNotDelegateNewWork || budgetForced) && !this.teamFinalized
+          && (!hasWorkingWorkers || budgetForced) && (!poolBusy || budgetForced);
 
         if (shouldFinalize) {
           this.teamFinalized = true;
@@ -1048,6 +1227,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEventMap> {
 
           // Clear any straggler delegations so they don't restart the leader later
           this.delegationRouter.clearAgent(agentId);
+          // The Boss's task(s) are finished
+          for (const root of this.dispatcher.activeRoots()) this.dispatcher.finishRoot(root.id, true);
 
           // Merge all worker worktrees back to main branch
           if (this.worktreeMerge) {
@@ -1097,12 +1278,19 @@ export class Orchestrator extends EventEmitter<OrchestratorEventMap> {
           // Treat as conversational — mark as final so the frontend shows it.
           console.log(`[Orchestrator] Leader ${agentId} completed without delegations — treating as conversational reply`);
           event.isFinalResult = true;
+          if (this.dispatcher.get(event.taskId)?.origin === "boss") this.dispatcher.finishRoot(event.taskId, true);
+          else this.dispatcher.finishSettledRoots();
           const completeInfo = this.phaseMachine.checkFinalResult(agentId);
           if (completeInfo) {
             this.emitEvent({ type: "team:phase", teamId: completeInfo.teamId, phase: completeInfo.phase, leadAgentId: completeInfo.leadAgentId });
           }
         }
       }
+    }
+
+    // The Lead's run of a Boss task failed for good (after retries)
+    if (event.type === "task:failed" && this.dispatcher.get(event.taskId)?.origin === "boss") {
+      this.dispatcher.finishRoot(event.taskId, false, event.error);
     }
 
     this.emitEvent(event);

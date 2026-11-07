@@ -14,6 +14,12 @@ export { RetryTracker } from "./retry.js";
 export { parseAgentOutput } from "./output-parser.js";
 export type { ParsedResult } from "./output-parser.js";
 export { CONFIG } from "./config.js";
+export { Dispatcher } from "./dispatcher.js";
+export type { DispatchDev, DispatcherHost, DispatcherOptions, RunEndReason, RunEndDecision, EnqueueSpec } from "./dispatcher.js";
+export { canLeadSelfWork, canLeadUseSubagents, DEFAULT_LEAD_POLICY, SUBAGENT_TOOL_NAMES, SUBAGENT_TOOLS_ALLOW } from "./lead-policy.js";
+export type { LeadPolicyConfig, LeadSelfWorkPolicy, LeadSubagentPolicy, LeadRunPolicy } from "./lead-policy.js";
+export { parseDelegationLine, canTransition, isTerminal, workItemTitle, BOSS_ID } from "./work-item.js";
+export type { WorkItem, WorkItemState, WorkItemPriority, WorkItemOrigin, HandoffKind, BossTaskFlags, ParsedDelegation } from "./work-item.js";
 export { getMemoryContext, getMemoryStore, clearMemory, recordReviewFeedback, recordProjectCompletion, recordProjectRatings, recordTechPreference, commitSession, buildRecoveryContext, getRecoveryString, getAgentL0, getWorkState, updateWorkState, clearAgentWorkState, setStorageRoot } from "./memory.js";
 export type { ReviewPattern, ProjectRecord } from "./memory.js";
 export { createWorktree, getManagedWorktreeBranch, getMergeHistory, mergeWorktree, removeWorktree, removeWorktreeOnly, checkConflicts, cleanupStaleWorktrees, getIsolatedGitEnv, getWorktreeBaseDir, resolveGitWorkspaceRoot } from "./worktree.js";
@@ -38,6 +44,12 @@ export type {
   CreateAgentOpts,
   CreateTeamOpts,
   RunTaskOpts,
+  BossAssignInput,
+  WorkItemUpdatedEvent,
+  HandoffEvent,
+  LeadWaitingEvent,
+  LeadSelfWorkEvent,
+  LeadSubagentStartedEvent,
   WorktreeOptions,
   RetryOptions,
   TaskStartedEvent,

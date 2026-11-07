@@ -6,6 +6,8 @@ import type { AgentManager } from "./agent-manager.js";
 import type { AgentSession } from "./agent-session.js";
 import type { PromptEngine } from "./prompt-templates.js";
 import type { OrchestratorEvent } from "./types.js";
+import type { Dispatcher } from "./dispatcher.js";
+import { workItemTitle, type WorkItem } from "./work-item.js";
 
 interface PendingResult {
   fromName: string;
@@ -58,6 +60,8 @@ export class DelegationRouter {
   private promptEngine: PromptEngine;
   private emitEvent: (event: OrchestratorEvent) => void;
   private prepareWorktree?: (agentId: string, taskId: string, repoPath?: string) => void;
+  /** Shared pool for Lead → dev work (P1.1). Reviews and direct fixes stay on the direct path. */
+  private dispatcher: Dispatcher | null = null;
   constructor(
     agentManager: AgentManager,
     promptEngine: PromptEngine,
@@ -68,6 +72,23 @@ export class DelegationRouter {
     this.promptEngine = promptEngine;
     this.emitEvent = emitEvent;
     this.prepareWorktree = prepareWorktree;
+  }
+
+  setDispatcher(dispatcher: Dispatcher): void {
+    this.dispatcher = dispatcher;
+  }
+
+  /**
+   * Track a restored work item as a pending delegation from the Lead, so its
+   * result is forwarded like any other (daemon restart).
+   */
+  adoptTask(taskId: string, originAgentId: string): void {
+    if (!this.tasks.has(taskId)) this.tasks.set(taskId, { origin: originAgentId, depth: 1 });
+  }
+
+  /** Forget delegations whose results nobody will forward any more. */
+  dropTask(taskId: string): void {
+    this.tasks.delete(taskId);
   }
 
   /**
@@ -183,7 +204,7 @@ export class DelegationRouter {
   }
 
   private wireDelegation(session: AgentSession): void {
-    session.onDelegation = (fromAgentId, targetName, prompt) => {
+    session.onDelegation = (fromAgentId, targetName, prompt, opts = {}) => {
       if (this.stopped) return;
 
       // Block delegation in conversational phases (create, design, complete)
@@ -198,10 +219,16 @@ export class DelegationRouter {
         return;
       }
 
-      const target = this.agentManager.findByName(targetName);
-      if (!target) {
-        console.log(`[Delegation] Target agent "${targetName}" not found, ignoring`);
+      let target = targetName ? this.agentManager.findByName(targetName) : undefined;
+      const fromLead = this.agentManager.isTeamLead(fromAgentId);
+      const usePool = !!this.dispatcher && fromLead
+        && (!target || (!target.role.toLowerCase().includes("review") && target.agentId !== fromAgentId));
+      if (!target && !usePool) {
+        console.log(`[Delegation] Target agent "${targetName ?? "TASK"}" not found, ignoring`);
         return;
+      }
+      if (targetName && !target) {
+        console.log(`[Delegation] Target agent "${targetName}" not found, any idle dev may take it`);
       }
 
       if (this.totalDelegations >= CONFIG.delegation.maxTotal) {
@@ -256,6 +283,33 @@ export class DelegationRouter {
         }
       }
 
+      if (usePool) {
+        // Shared pool: the Dispatcher picks an idle dev and walks the paper over first.
+        this.emitEvent({
+          type: "team:chat",
+          fromAgentId,
+          toAgentId: target?.agentId,
+          message: prompt,
+          messageType: "delegation",
+          taskId,
+          timestamp: Date.now(),
+        });
+        const root = this.dispatcher!.currentRoot();
+        console.log(`[Delegation] ${fromAgentId} -> pool (${target ? `${opts.pinned ? "pinned" : "prefers"} ${target.name}` : opts.skills?.length ? `skills ${opts.skills.join(",")}` : "any dev"}) depth=${newDepth} total=${this.totalDelegations}: ${cleanPrompt.slice(0, 80)}`);
+        this.dispatcher!.enqueue({
+          id: taskId,
+          parentId: root?.id ?? null,
+          prompt: cleanPrompt,
+          requiredSkills: opts.skills,
+          preferredAgentId: target?.agentId ?? null,
+          pinned: !!opts.pinned && !!target,
+          fromAgentId,
+          repoPath,
+        });
+        return;
+      }
+      target = target!;
+
       const fullPrompt = this.promptEngine.render("delegation-prefix", { fromName, fromRole, prompt: cleanPrompt });
 
       // Track last dev worker for reviewer → dev shortcut routing
@@ -299,122 +353,240 @@ export class DelegationRouter {
       const effectiveRepoPath = targetRole.includes("review")
         ? this.resolveDevWorktreePath(repoPath)
         : repoPath;
-      target.runTask(taskId, fullPrompt, effectiveRepoPath, workerTeamContext);
+      const reviewer = target;
+      const run = () => {
+        if (this.stopped) return;
+        reviewer.runTask(taskId, fullPrompt, effectiveRepoPath, workerTeamContext);
+      };
+      if (targetRole.includes("review") && this.dispatcher && this.lastDevAgentId) {
+        // The dev walks the work over to the reviewer before the review starts
+        this.handoffToReviewer(this.lastDevAgentId, reviewer.agentId, taskId, run);
+      } else {
+        run();
+      }
     };
   }
 
+  /** Start a pooled item on the dev the Dispatcher picked (after the lead_to_dev hand-off). */
+  startDispatched(item: WorkItem, agentId: string): void {
+    const target = this.agentManager.get(agentId);
+    if (!target || this.stopped) return;
+    const fromAgentId = item.fromAgentId ?? this.agentManager.getTeamLead() ?? agentId;
+    if (!this.tasks.has(item.id)) this.tasks.set(item.id, { origin: fromAgentId, depth: 1 });
+    const fromSession = this.agentManager.get(fromAgentId);
+    const fromName = fromSession?.name ?? fromAgentId;
+    const fromRole = fromSession?.role ?? "Team Lead";
+    const retryNote = item.attempts > 1
+      ? `[Retry ${item.attempts}: the previous attempt was interrupted before it finished. Check what is already done, then complete the task.]\n\n`
+      : "";
+    const fullPrompt = this.promptEngine.render("delegation-prefix", { fromName, fromRole, prompt: retryNote + item.prompt });
+    const repoPath = this.teamProjectDir ?? item.repoPath;
+
+    this.lastDevAgentId = target.agentId;
+    this.emitEvent({ type: "task:delegated", fromAgentId, toAgentId: target.agentId, taskId: item.id, prompt: item.prompt });
+    this.assignedTask.set(target.agentId, item.id);
+    this.emitEvent({
+      type: "agent:activity",
+      agentId: target.agentId,
+      agentName: target.name,
+      intent: item.prompt.slice(0, CONFIG.limits.intentChars),
+      phase: "started",
+    });
+    this.prepareWorktree?.(target.agentId, item.id, repoPath);
+    // Pool work is explicitly assigned new work: it is not blocked by an earlier user cancel
+    target.runTask(item.id, fullPrompt, repoPath, this.buildWorkerTeamContext(target.agentId), true);
+  }
+
+  /** Lead self-work on a pooled item (lead.selfWork policy). Its result comes back to the Lead. */
+  startSelfWork(item: WorkItem, leadId: string): void {
+    const lead = this.agentManager.get(leadId);
+    if (!lead || this.stopped) return;
+    if (!this.tasks.has(item.id)) this.tasks.set(item.id, { origin: leadId, depth: 1 });
+    this.emitEvent({
+      type: "team:chat",
+      fromAgentId: leadId,
+      message: `No developer is free, so I'm taking this one myself: ${item.title}`,
+      messageType: "status",
+      taskId: item.id,
+      timestamp: Date.now(),
+    });
+    lead.runTask(item.id, item.prompt, this.teamProjectDir ?? item.repoPath, this.buildWorkerTeamContext(leadId), true);
+  }
+
+  /**
+   * A pooled item failed without its run reporting back (e.g. it never spawned):
+   * tell the Lead like a normal failed result.
+   */
+  forwardDispatchFailure(item: WorkItem, summary: string): void {
+    const meta = this.tasks.get(item.id);
+    if (!meta || this.stopped) return;
+    this.tasks.delete(item.id);
+    const agentId = item.assigneeId ?? meta.origin;
+    const fromName = this.agentManager.get(agentId)?.name ?? agentId;
+    this.emitEvent({ type: "task:result-returned", fromAgentId: agentId, toAgentId: meta.origin, taskId: item.id, summary, success: false });
+    this.enqueueResult(meta.origin, { fromName, statusWord: "failed", summary: summary.slice(0, CONFIG.limits.chatMessageChars) });
+  }
+
+  private handoffToReviewer(devAgentId: string, reviewerId: string, taskId: string, run: () => void): void {
+    const item = this.dispatcher!.latestItemOf(devAgentId);
+    this.dispatcher!.announceHandoff({
+      workItemId: item?.id ?? taskId,
+      fromId: devAgentId,
+      toId: reviewerId,
+      kind: "dev_to_reviewer",
+      label: item ? `Review: ${item.title}` : "Review",
+    }, run);
+  }
+
   private wireResultForwarding(session: AgentSession): void {
-    session.onTaskComplete = (agentId, taskId, summary, success, fullOutput) => {
+    session.onTaskComplete = (agentId, taskId, rawSummary, success, fullOutput) => {
+      // The pool hears about every run end first (frees the dev, re-queues zombies)
+      const decision = this.dispatcher?.onRunEnded(agentId, taskId, { success, reason: session.lastEndReason, summary: rawSummary });
       if (this.stopped) return;
+      if (decision?.action === "requeued" || decision?.action === "ignored") return;
+      const summary = decision?.action === "failed" && decision.summary ? decision.summary : rawSummary;
 
       const meta = this.tasks.get(taskId);
       if (!meta || meta.isResultTask) return; // Result tasks are not forwarded — they're leader-internal
-      const originAgentId = meta.origin;
-      this.tasks.delete(taskId);
-      if (this.assignedTask.get(agentId) === taskId) {
-        this.assignedTask.delete(agentId);
+
+      const fromRoleLower = session.role.toLowerCase();
+      const isDevResult = !!this.dispatcher && agentId !== meta.origin && !fromRoleLower.includes("review") && !meta.isDirectFix;
+      if (isDevResult && this.agentManager.get(meta.origin)) {
+        // The dev walks the result back to the Lead; meta stays pending until it arrives,
+        // so result batching still waits for this one.
+        const item = this.dispatcher!.get(taskId) ?? this.dispatcher!.latestItemOf(agentId);
+        this.dispatcher!.announceHandoff({
+          workItemId: item?.id ?? taskId,
+          fromId: agentId,
+          toId: meta.origin,
+          kind: "dev_to_lead",
+          label: item ? `Done: ${item.title}` : workItemTitle(summary),
+        }, () => this.forwardResult(agentId, taskId, summary, success, fullOutput));
+        return;
       }
+      this.forwardResult(agentId, taskId, summary, success, fullOutput);
+    };
+  }
 
-      const originSession = this.agentManager.get(originAgentId);
-      if (!originSession) return;
+  private forwardResult(agentId: string, taskId: string, summary: string, success: boolean, fullOutput?: string): void {
+    if (this.stopped) return;
+    const meta = this.tasks.get(taskId);
+    if (!meta || meta.isResultTask) return;
+    const originAgentId = meta.origin;
+    this.tasks.delete(taskId);
+    if (this.assignedTask.get(agentId) === taskId) {
+      this.assignedTask.delete(agentId);
+    }
 
-      const fromSession = this.agentManager.get(agentId);
-      const fromName = fromSession?.name ?? agentId;
-      const statusWord = success ? "completed successfully" : "failed";
+    const originSession = this.agentManager.get(originAgentId);
+    if (!originSession) return;
 
-      console.log(`[ResultForward] ${agentId} -> ${originAgentId}: ${summary.slice(0, 80)} (success=${success})`);
+    const fromSession = this.agentManager.get(agentId);
+    const fromName = fromSession?.name ?? agentId;
+    const statusWord = success ? "completed successfully" : "failed";
 
-      this.emitEvent({
-        type: "task:result-returned",
-        fromAgentId: agentId,
-        toAgentId: originAgentId,
-        taskId,
-        summary,
-        success,
-      });
+    console.log(`[ResultForward] ${agentId} -> ${originAgentId}: ${summary.slice(0, 80)} (success=${success})`);
 
-      this.emitEvent({
-        type: "team:chat",
-        fromAgentId: agentId,
-        toAgentId: originAgentId,
-        message: summary.slice(0, CONFIG.limits.chatMessageChars),
-        messageType: "result",
-        taskId,
-        timestamp: Date.now(),
-      });
+    this.emitEvent({
+      type: "task:result-returned",
+      fromAgentId: agentId,
+      toAgentId: originAgentId,
+      taskId,
+      summary,
+      success,
+    });
 
-      // Broadcast activity completion
-      this.emitEvent({
-        type: "agent:activity",
-        agentId,
-        agentName: fromName,
-        intent: summary.slice(0, CONFIG.limits.intentChars),
-        phase: "completed",
-      });
+    this.emitEvent({
+      type: "team:chat",
+      fromAgentId: agentId,
+      toAgentId: originAgentId,
+      message: summary.slice(0, CONFIG.limits.chatMessageChars),
+      messageType: "result",
+      taskId,
+      timestamp: Date.now(),
+    });
 
-      // ── Direct fix complete: dev finished fix → auto re-review ──
-      if (meta.isDirectFix && meta.reviewerAgentId && success) {
-        const reviewerSession = this.agentManager.get(meta.reviewerAgentId);
-        if (reviewerSession) {
-          const reReviewTaskId = nanoid();
-          this.tasks.set(reReviewTaskId, { origin: originAgentId, depth: 1 });
-          this.assignedTask.set(meta.reviewerAgentId, reReviewTaskId);
-          this.totalDelegations++;
+    // Broadcast activity completion
+    this.emitEvent({
+      type: "agent:activity",
+      agentId,
+      agentName: fromName,
+      intent: summary.slice(0, CONFIG.limits.intentChars),
+      phase: "completed",
+    });
 
-          // Re-review: pass only the structured issue checklist, not Dev's self-report.
-          // Reviewer is always a clean session (never resumes), so runTask() will wrap
-          // this prompt in the reviewer-initial template which includes format rules.
-          // Do NOT pre-render with a template here — that causes double-wrapping.
-          const issueChecklist = meta.reviewContext
-            ? `\nIssues to verify (from your previous review):\n${meta.reviewContext}`
-            : "";
-          const reReviewPrompt = `[Re-review after fix] ${fromName} reports fixing the issues. Read the code and verify each fix is correct.${issueChecklist}`;
-          const repoPath = this.resolveDevWorktreePath(this.teamProjectDir ?? undefined);
+    // ── Direct fix complete: dev finished fix → auto re-review ──
+    if (meta.isDirectFix && meta.reviewerAgentId && success) {
+      const reviewerSession = this.agentManager.get(meta.reviewerAgentId);
+      if (reviewerSession) {
+        const reReviewTaskId = nanoid();
+        this.tasks.set(reReviewTaskId, { origin: originAgentId, depth: 1 });
+        this.assignedTask.set(meta.reviewerAgentId, reReviewTaskId);
+        this.totalDelegations++;
 
-          console.log(`[DirectFix] Dev ${fromName} fix complete → auto re-review by ${reviewerSession.name}`);
-          this.emitEvent({
-            type: "task:delegated",
-            fromAgentId: agentId,
-            toAgentId: meta.reviewerAgentId,
-            taskId: reReviewTaskId,
-            prompt: `Re-review after fix by ${fromName}`,
-          });
-          this.emitEvent({
-            type: "team:chat",
-            fromAgentId: agentId,
-            toAgentId: meta.reviewerAgentId,
-            message: `Fix completed, requesting re-review`,
-            messageType: "result",
-            taskId: reReviewTaskId,
-            timestamp: Date.now(),
-          });
+        // Re-review: pass only the structured issue checklist, not Dev's self-report.
+        // Reviewer is always a clean session (never resumes), so runTask() will wrap
+        // this prompt in the reviewer-initial template which includes format rules.
+        // Do NOT pre-render with a template here — that causes double-wrapping.
+        const issueChecklist = meta.reviewContext
+          ? `\nIssues to verify (from your previous review):\n${meta.reviewContext}`
+          : "";
+        const reReviewPrompt = `[Re-review after fix] ${fromName} reports fixing the issues. Read the code and verify each fix is correct.${issueChecklist}`;
+        const repoPath = this.resolveDevWorktreePath(this.teamProjectDir ?? undefined);
 
-          reviewerSession.runTask(reReviewTaskId, reReviewPrompt, repoPath);
-          return; // Handled — skip normal leader forwarding
-        }
-      }
+        console.log(`[DirectFix] Dev ${fromName} fix complete → auto re-review by ${reviewerSession.name}`);
+        this.emitEvent({
+          type: "task:delegated",
+          fromAgentId: agentId,
+          toAgentId: meta.reviewerAgentId,
+          taskId: reReviewTaskId,
+          prompt: `Re-review after fix by ${fromName}`,
+        });
+        this.emitEvent({
+          type: "team:chat",
+          fromAgentId: agentId,
+          toAgentId: meta.reviewerAgentId,
+          message: `Fix completed, requesting re-review`,
+          messageType: "result",
+          taskId: reReviewTaskId,
+          timestamp: Date.now(),
+        });
 
-      // ── Direct fix shortcut: reviewer FAIL → dev (skip leader) ──
-      if (this.tryDirectFix(agentId, fromSession, fullOutput ?? summary, originAgentId)) {
+        const reReview = () => {
+          if (!this.stopped) reviewerSession.runTask(reReviewTaskId, reReviewPrompt, repoPath);
+        };
+        if (this.dispatcher) this.handoffToReviewer(agentId, meta.reviewerAgentId, reReviewTaskId, reReview);
+        else reReview();
         return; // Handled — skip normal leader forwarding
       }
+    }
 
-      // Capture preview fields from developer results so leader always has them
-      const fromRole = fromSession?.role?.toLowerCase() ?? "";
-      if (!fromRole.includes("review") && fullOutput) {
-        const lines: string[] = [];
-        const em = fullOutput.match(/ENTRY_FILE:\s*(.+)/i);
-        const cm = fullOutput.match(/PREVIEW_CMD:\s*(.+)/i);
-        const pm = fullOutput.match(/PREVIEW_PORT:\s*[*`_]*(\d+)/i);
-        if (em) lines.push(`ENTRY_FILE: ${em[1].trim()}`);
-        if (cm) lines.push(`PREVIEW_CMD: ${cm[1].trim()}`);
-        if (pm) lines.push(`PREVIEW_PORT: ${pm[1]}`);
-        if (lines.length > 0) this.lastDevPreview = lines.join("\n");
-      }
+    // ── Direct fix shortcut: reviewer FAIL → dev (skip leader) ──
+    if (this.tryDirectFix(agentId, fromSession, fullOutput ?? summary, originAgentId)) {
+      return; // Handled — skip normal leader forwarding
+    }
 
-      // Batch results: accumulate and flush to leader after a short window
-      this.enqueueResult(originAgentId, { fromName, statusWord, summary: summary.slice(0, CONFIG.limits.chatMessageChars) });
-    };
+    // Reviewer PASS: the reviewed dev's delivered items are accepted
+    if (this.dispatcher && success && this.lastDevAgentId && (fromSession?.role.toLowerCase().includes("review") ?? false)) {
+      const verdict = (fullOutput ?? summary).match(/VERDICT[:\s]*(\w+)/i)?.[1]?.toUpperCase();
+      if (verdict === "PASS") this.dispatcher.reviewPassed(this.lastDevAgentId);
+    }
+
+    // Capture preview fields from developer results so leader always has them
+    const fromRole = fromSession?.role?.toLowerCase() ?? "";
+    if (!fromRole.includes("review") && fullOutput) {
+      const lines: string[] = [];
+      const em = fullOutput.match(/ENTRY_FILE:\s*(.+)/i);
+      const cm = fullOutput.match(/PREVIEW_CMD:\s*(.+)/i);
+      const pm = fullOutput.match(/PREVIEW_PORT:\s*[*`_]*(\d+)/i);
+      if (em) lines.push(`ENTRY_FILE: ${em[1].trim()}`);
+      if (cm) lines.push(`PREVIEW_CMD: ${cm[1].trim()}`);
+      if (pm) lines.push(`PREVIEW_PORT: ${pm[1]}`);
+      if (lines.length > 0) this.lastDevPreview = lines.join("\n");
+    }
+
+    // Batch results: accumulate and flush to leader after a short window
+    this.enqueueResult(originAgentId, { fromName, statusWord, summary: summary.slice(0, CONFIG.limits.chatMessageChars) });
   }
 
   /**
@@ -504,6 +676,7 @@ export class DelegationRouter {
       timestamp: Date.now(),
     });
 
+    this.dispatcher?.fixStarted(devAgentId, fixTaskId);
     this.prepareWorktree?.(devAgentId, fixTaskId, repoPath);
     const workerTeamContext = this.buildWorkerTeamContext(devAgentId);
     devSession.runTask(fixTaskId, fixPrompt, repoPath, workerTeamContext);

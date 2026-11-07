@@ -19,7 +19,12 @@ export interface BuildArgsOpts {
   permissionMode?: import("./permissions.js").SpawnPermissionMode;
   /** True only when permissionMode is "bypass" (kept for backends that branch on it) */
   fullAccess?: boolean;
+  /** Run with no tools at all (Claude: --tools "") */
   noTools?: boolean;
+  /** Restrict the run to exactly these tools (Claude: --tools "A,B"); wins over noTools */
+  tools?: readonly string[];
+  /** Deny these tools (Claude: --disallowedTools "A,B") */
+  disallowedTools?: readonly string[];
   /** Override model for this invocation (e.g. "sonnet" for faster leader) */
   model?: string;
   /** Enable verbose output (default: false, enable via DEBUG env) */

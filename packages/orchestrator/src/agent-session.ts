@@ -11,6 +11,9 @@ import { removeWorktree, getIsolatedGitEnv } from "./worktree.js";
 import type { AIBackend } from "./ai-backend.js";
 import type { AgentStatus, TaskResultPayload, OrchestratorEvent, LogActivityEvent } from "./types.js";
 import type { TemplateName } from "./prompt-templates.js";
+import { parseDelegationLine } from "./work-item.js";
+import { SUBAGENT_TOOL_NAMES, SUBAGENT_TOOLS_ALLOW, type LeadRunPolicy } from "./lead-policy.js";
+import type { RunEndReason } from "./dispatcher.js";
 import { getMemoryContext, commitSession, buildRecoveryContext, getRecoveryString, saveSessionHistory, updateWorkState, clearAgentWorkState } from "./memory.js";
 
 /* ── Tool activity summarizer ──────────────────────────────────── */
@@ -153,8 +156,16 @@ interface PendingApproval {
   resolve: (decision: "yes" | "no") => void;
 }
 
-/** Callback for delegation: (fromAgentId, targetName, prompt) => void */
-export type DelegationHandler = (fromAgentId: string, targetName: string, prompt: string) => void;
+/** Callback for delegation. targetName is null for "TASK:" lines (any idle dev). */
+export type DelegationHandler = (
+  fromAgentId: string,
+  targetName: string | null,
+  prompt: string,
+  opts?: { pinned?: boolean; skills?: string[] },
+) => void;
+
+/** Callback for every tool_use block the agent emits */
+export type ToolUseHandler = (agentId: string, taskId: string, toolName: string, input: Record<string, unknown> | undefined) => void;
 
 /** Callback when a task completes: (agentId, taskId, summary, success) => void */
 export type TaskCompleteHandler = (agentId: string, taskId: string, summary: string, success: boolean, fullOutput?: string) => void;
@@ -235,6 +246,24 @@ export class AgentSession {
   originalTask: string | null = null;
   onDelegation: DelegationHandler | null = null;
   onTaskComplete: TaskCompleteHandler | null = null;
+  onToolUse: ToolUseHandler | null = null;
+  /** Team lead only: how the next run is spawned (tools, self-work). Read at spawn time. */
+  leadRunPolicy: ((taskId: string) => LeadRunPolicy) | null = null;
+  /** Why the last run ended (read by the Dispatcher in onTaskComplete) */
+  lastEndReason: RunEndReason | null = null;
+  /** The current run emitted a stream-json "result" message */
+  private runHadResult = false;
+  /** Set by abortRun() so the close handler reports why the process died */
+  private abortReason: RunEndReason | null = null;
+  /** Between dequeueNext() and the delayed runTask() */
+  private dequeuing = false;
+  /** Task id of the run in progress (or waiting for approval) */
+  get activeTaskId(): string | null { return this.currentTaskId; }
+  get isAwaitingApproval(): boolean { return this.awaitingSpawnApproval; }
+  /** Busy for dispatch purposes: running, waiting for approval, or with queued work */
+  get isBusy(): boolean {
+    return !!this.process || this.awaitingSpawnApproval || this.taskQueue.length > 0 || this.dequeuing;
+  }
   /** Whether the last failure was a timeout (not retryable) */
   get wasTimeout(): boolean { return this.timedOut; }
   get isTeamLead(): boolean { return this._isTeamLead; }
@@ -330,6 +359,14 @@ export class AgentSession {
 
     this.currentTaskId = taskId;
     this.currentPhase = phaseOverride ?? null;
+    this.runHadResult = false;
+    this.abortReason = null;
+    this.lastEndReason = null;
+    // Lead runs: tool set and prompt mode come from the daemon's lead policy
+    const leadPolicy: LeadRunPolicy | null = this._isTeamLead
+      ? (this.leadRunPolicy?.(taskId) ?? { selfWork: false, subagents: false })
+      : null;
+    const leadSelfWork = !!leadPolicy?.selfWork;
     // Worktree path takes priority over repoPath — the whole point of worktree
     // isolation is to keep agent work off the main branch. repoPath is only used
     // as a fallback when no worktree is assigned.
@@ -426,7 +463,10 @@ export class AgentSession {
       }
 
       let fullPrompt: string;
-      if (this._isTeamLead && phaseOverride && ["create", "design", "complete"].includes(phaseOverride)) {
+      if (leadSelfWork) {
+        // Self-work: the Lead does a queued sub-task like a developer would
+        fullPrompt = this._renderPrompt("worker-initial", { ...templateVars, role: "Team Lead, doing this task yourself because no developer is free" });
+      } else if (this._isTeamLead && phaseOverride && ["create", "design", "complete"].includes(phaseOverride)) {
         // Conversational phases: use continuation template if resuming, full template if first turn
         const templateName = (this.hasHistory ? `leader-${phaseOverride}-continue` : `leader-${phaseOverride}`) as TemplateName;
         fullPrompt = this._renderPrompt(templateName, templateVars);
@@ -455,6 +495,7 @@ export class AgentSession {
         const canResume = !isReviewer && this.hasHistory && !!this.sessionId;
         fullPrompt = this._renderPrompt(canResume ? "worker-continue" : workerInitial, templateVars);
       }
+      if (leadPolicy?.promptNote) fullPrompt += `\n\n${leadPolicy.promptNote}`;
       // Permission gate: auto mode where the CLI has one; otherwise the CEO approves
       // this run before anything is spawned. Bypass only via explicit per-backend opt-in.
       const permission = resolveSpawnPermission(this.backend, this.permissionPolicy(this.backend.id));
@@ -473,7 +514,11 @@ export class AgentSession {
         resumeSessionId: this.role.toLowerCase().includes("review") ? undefined : (this.sessionId ?? undefined),
         permissionMode: permission.mode,
         fullAccess,
-        noTools: this._isTeamLead,
+        // Lead: no tools by default; only the subagent tool when the policy allows it;
+        // full tools (minus subagents unless allowed) while doing self-work.
+        noTools: this._isTeamLead && !leadSelfWork && !leadPolicy?.subagents,
+        tools: this._isTeamLead && !leadSelfWork && leadPolicy?.subagents ? SUBAGENT_TOOLS_ALLOW : undefined,
+        disallowedTools: leadSelfWork && !leadPolicy?.subagents ? SUBAGENT_TOOL_NAMES : undefined,
         model: this._model,
         verbose,
         agentType,
@@ -509,7 +554,7 @@ export class AgentSession {
       // Solo agents have no timeout — user can cancel manually.
       this.timedOut = false;
       const TASK_TIMEOUT_MS = !this.teamId ? 0
-        : this._isTeamLead ? CONFIG.timing.leaderTimeoutMs
+        : this._isTeamLead && !leadSelfWork ? CONFIG.timing.leaderTimeoutMs
         : CONFIG.timing.workerTimeoutMs;
       if (TASK_TIMEOUT_MS > 0) {
         this.taskTimeout = setTimeout(() => {
@@ -521,8 +566,8 @@ export class AgentSession {
         }, TASK_TIMEOUT_MS);
       }
 
-      // Delegation detection regex
-      const DELEGATION_RE = /^\s*(?:[-*>]\s*)?(?:\*\*)?@(\w+)(?:\*\*)?:\s*(.+)$/;
+      // Delegation lines (@Name:, @Name!:, TASK:, TASK[skill]:) — Lead only, not during self-work
+      const parseDelegations = this._isTeamLead && !leadSelfWork;
 
       // Filter out system/diagnostic noise that should not appear in the UI.
       // fromStreamJson: when true, skip verb/path filters (those are only for plain-text backends).
@@ -544,13 +589,13 @@ export class AgentSession {
       };
 
       // Accumulator for multi-line delegations (e.g. @Kai: Fix bugs:\n1. bug one\n2. bug two)
-      let pendingDelegation: { targetName: string; lines: string[] } | null = null;
+      let pendingDelegation: { targetName: string | null; pinned: boolean; skills: string[]; lines: string[] } | null = null;
 
       const flushDelegation = () => {
         if (pendingDelegation && this.onDelegation) {
           const fullPrompt = pendingDelegation.lines.join("\n").replace(/\*\*$/, "").trim();
-          console.log(`[Delegation detected] ${this.name} -> @${pendingDelegation.targetName}: ${fullPrompt.slice(0, 120)}`);
-          this.onDelegation(this.agentId, pendingDelegation.targetName, fullPrompt);
+          console.log(`[Delegation detected] ${this.name} -> ${pendingDelegation.targetName ? `@${pendingDelegation.targetName}${pendingDelegation.pinned ? "!" : ""}` : "TASK"}: ${fullPrompt.slice(0, 120)}`);
+          this.onDelegation(this.agentId, pendingDelegation.targetName, fullPrompt, { pinned: pendingDelegation.pinned, skills: pendingDelegation.skills });
         }
         pendingDelegation = null;
       };
@@ -563,12 +608,11 @@ export class AgentSession {
         for (const line of lines) {
           const trimmed = line.trim();
           console.log(`[Agent ${this.name}] ${trimmed.slice(0, 200)}`);
-          const match = this._isTeamLead ? trimmed.match(DELEGATION_RE) : null;
+          const match = parseDelegations ? parseDelegationLine(trimmed) : null;
           if (match) {
             // Flush any previous delegation before starting a new one
             flushDelegation();
-            const [, targetName, delegatedPrompt] = match;
-            pendingDelegation = { targetName, lines: [delegatedPrompt] };
+            pendingDelegation = { targetName: match.target, pinned: match.pinned, skills: match.skills, lines: [match.prompt] };
           } else if (pendingDelegation) {
             // Continuation line of current delegation
             pendingDelegation.lines.push(trimmed);
@@ -668,6 +712,7 @@ export class AgentSession {
                     if ((toolName === "Write" || toolName === "Edit") && toolInput?.file_path) {
                       this.taskChangedFiles.add(toolInput.file_path as string);
                     }
+                    this.onToolUse?.(this.agentId, taskId, toolName, toolInput);
                     const activity = summarizeToolUse(toolName, toolInput);
                     if (activity) {
                       this.lastActivityText = activity;
@@ -684,6 +729,7 @@ export class AgentSession {
                 // (conversationLog removed — recovery context now uses @pixel-crew/memory's
                 //  structured SessionSummary instead of raw message fragments)
               } else if (msg.type === "result") {
+                this.runHadResult = true;
                 // Result message: authoritative session total from msg.usage
                 if (msg.usage) {
                   const usage = msg.usage;
@@ -766,6 +812,7 @@ export class AgentSession {
                     }
                   }
                 } else if (msg.type === "result" && msg.result) {
+                  this.runHadResult = true;
                   this._lastResultText = msg.result;
                   if (!this.stdoutBuffer) {
                     this.stdoutBuffer = msg.result;
@@ -787,6 +834,10 @@ export class AgentSession {
         this.cancelled = false;
 
         console.log(`[Agent ${this.agentId}] ${this.backend.name} exited: code=${code}, cancelled=${wasCancelled}, stdout=${this.stdoutBuffer.length}ch`);
+        this.lastEndReason = wasCancelled ? "cancelled"
+          : code === 0 ? "result"
+          : this.abortReason ?? (this.timedOut ? "timeout" : this.runHadResult ? "result" : "exit_no_result");
+        this.abortReason = null;
 
         try {
           if (wasCancelled) {
@@ -966,6 +1017,10 @@ export class AgentSession {
         taskId,
         error: (err as Error).message,
       });
+      // Report back so a delegated task is not left waiting forever
+      this.lastEndReason = "spawn_error";
+      this.currentTaskId = null;
+      this.onTaskComplete?.(this.agentId, taskId, (err as Error).message, false);
     }
   }
 
@@ -1002,6 +1057,7 @@ export class AgentSession {
     console.log(`[Agent ${this.name}] ${error}`);
     this.currentTaskId = null;
     this._lastResult = `failed: ${error.slice(0, 120)}`;
+    this.lastEndReason = "not_approved";
     this.persistWorkState("cancelled", true);
     this.setStatus("error");
     this.onEvent({ type: "task:failed", agentId: this.agentId, taskId, error });
@@ -1086,9 +1142,25 @@ export class AgentSession {
   private dequeueNext() {
     if (this.taskQueue.length === 0) return;
     const next = this.taskQueue.shift()!;
+    this.dequeuing = true;
     setTimeout(() => {
+      this.dequeuing = false;
       this.runTask(next.taskId, next.prompt, next.repoPath, next.teamContext, false, next.phaseOverride);
     }, CONFIG.timing.dequeueDelayMs);
+  }
+
+  /**
+   * Kill the current run without marking it user-cancelled (zombie handling).
+   * The close handler then reports `reason` as lastEndReason. Returns false if idle.
+   */
+  abortRun(reason: RunEndReason): boolean {
+    const pid = this.process?.pid;
+    if (!pid) return false;
+    this.abortReason = reason;
+    try { process.kill(-pid, "SIGKILL"); } catch {
+      try { this.process?.kill("SIGKILL"); } catch { /* already dead */ }
+    }
+    return true;
   }
 
   private cancelled = false;
@@ -1113,6 +1185,7 @@ export class AgentSession {
     // Kill the running process if there is one
     if (this.process && this.process.pid) {
       this.cancelled = true;
+      this.lastEndReason = "cancelled";
       this.hasHistory = true;
       saveSessionId(this.agentId, this.sessionId);
       this.persistWorkState("cancelled", true);

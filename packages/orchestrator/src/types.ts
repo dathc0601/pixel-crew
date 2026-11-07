@@ -210,7 +210,53 @@ export interface TokenUpdateEvent {
   outputTokens: number;
 }
 
+// ---------------------------------------------------------------------------
+// Dispatcher / choreography (Phase 1)
+// ---------------------------------------------------------------------------
+
+export interface WorkItemUpdatedEvent {
+  type: "work:updated";
+  item: import("./work-item.js").WorkItem;
+}
+
+export interface HandoffEvent {
+  type: "handoff";
+  handoffId: string;
+  fromId: string;
+  toId: string;
+  workItemId: string;
+  kind: import("./work-item.js").HandoffKind;
+  label: string;
+  durationMs: number;
+}
+
+export interface LeadWaitingEvent {
+  type: "lead:waiting";
+  leadId: string | null;
+  queueLength: number;
+  reason: "all_devs_busy" | "pinned_dev_busy" | "no_devs" | "none";
+}
+
+export interface LeadSelfWorkEvent {
+  type: "lead:self-work";
+  leadId: string;
+  workItemId: string;
+}
+
+export interface LeadSubagentStartedEvent {
+  type: "lead:subagent-started";
+  leadId: string;
+  workItemId: string | null;
+  description: string;
+  subagentType?: string;
+}
+
 export type OrchestratorEvent =
+  | WorkItemUpdatedEvent
+  | HandoffEvent
+  | LeadWaitingEvent
+  | LeadSelfWorkEvent
+  | LeadSubagentStartedEvent
   | TaskStartedEvent
   | TaskDoneEvent
   | TaskFailedEvent
@@ -238,6 +284,11 @@ export type OrchestratorEvent =
 // ---------------------------------------------------------------------------
 
 export interface OrchestratorEventMap {
+  "work:updated": [WorkItemUpdatedEvent];
+  "handoff": [HandoffEvent];
+  "lead:waiting": [LeadWaitingEvent];
+  "lead:self-work": [LeadSelfWorkEvent];
+  "lead:subagent-started": [LeadSubagentStartedEvent];
   "task:started": [TaskStartedEvent];
   "task:done": [TaskDoneEvent];
   "task:failed": [TaskFailedEvent];
@@ -297,6 +348,12 @@ export interface OrchestratorOptions {
    * to the next run). Defaults to "auto" for every backend.
    */
   permissionPolicy?: (backendId: string) => import("./permissions.js").PermissionPolicy;
+  /** Hand-off walk duration (ms, 0 = instant), read at every hand-off. Default 2500. */
+  handoffDurationMs?: () => number;
+  /** Lead self-work / subagent policy, read when needed. Default: never / when_all_devs_busy. */
+  leadPolicy?: () => import("./lead-policy.js").LeadPolicyConfig;
+  /** Dispatcher tuning (tests) */
+  dispatch?: { maxAttempts?: number; heartbeatTimeoutMs?: number };
 }
 
 export interface CreateAgentOpts {
@@ -323,4 +380,11 @@ export interface CreateTeamOpts {
 export interface RunTaskOpts {
   repoPath?: string;
   phaseOverride?: string;
+}
+
+export interface BossAssignInput {
+  prompt: string;
+  urgent: boolean;
+  allowLeadSelfWork?: boolean;
+  allowSubagents?: boolean;
 }
