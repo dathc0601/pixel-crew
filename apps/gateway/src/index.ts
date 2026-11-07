@@ -1783,6 +1783,15 @@ process.on("SIGHUP", cleanup);
 process.on("beforeExit", () => { try { persistTeamState(); } catch { /* ignore */ } });
 process.on("exit", () => { clearRuntimeState(); });
 
+// Desktop sidecar (P5.2): the tray app closes our stdin to ask for a clean exit. Windows has no
+// SIGTERM, so this is the only graceful path there; the app force-kills the tree after 3 s.
+if (process.env.PIXEL_CREW_EXIT_ON_STDIN_EOF === "1") {
+  process.stdin.on("end", cleanup);
+  process.stdin.on("close", cleanup);
+  process.stdin.on("data", () => { /* drain; nothing is read from the desktop shell */ });
+  process.stdin.resume();
+}
+
 // Orphan detection: if parent process dies (e.g. tsx watch killed), exit gracefully.
 // ppid becomes 1 (launchd/init) when parent is gone.
 const parentPid = process.ppid;
