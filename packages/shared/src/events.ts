@@ -371,6 +371,15 @@ export const OfficeConfigEvent = z.object({
   fileError: z.string().optional(),
 });
 
+/**
+ * How the daemon runs (sent on PING). demo = every agent is the scripted fake backend
+ * (PIXEL_CREW_DEMO=1 or --demo): no AI CLI runs and no tokens are spent.
+ */
+export const GatewayInfoEvent = z.object({
+  type: z.literal("GATEWAY_INFO"),
+  demo: z.boolean(),
+});
+
 export const GatewayEventSchema = z.discriminatedUnion("type", [
   AgentsSyncEvent,
   AgentStatusEvent,
@@ -411,6 +420,7 @@ export const GatewayEventSchema = z.discriminatedUnion("type", [
   LeadSelfWorkEvent,
   LeadSubagentStartedEvent,
   OfficeConfigEvent,
+  GatewayInfoEvent,
 ]);
 
 export type TokenUsage = z.infer<typeof TokenUsage>;
@@ -453,6 +463,7 @@ export type LeadWaitingEvent = z.infer<typeof LeadWaitingEvent>;
 export type LeadSelfWorkEvent = z.infer<typeof LeadSelfWorkEvent>;
 export type LeadSubagentStartedEvent = z.infer<typeof LeadSubagentStartedEvent>;
 export type OfficeConfigEvent = z.infer<typeof OfficeConfigEvent>;
+export type GatewayInfoEvent = z.infer<typeof GatewayInfoEvent>;
 export type GatewayEvent = z.infer<typeof GatewayEventSchema>;
 
 /**

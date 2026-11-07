@@ -258,6 +258,20 @@ export const SetOfficeConfigCommand = z.object({
   office: z.record(z.string(), z.unknown()),
 });
 
+/** Owner-only: start the work items held after a daemon restart (WorkItem.held). */
+export const ResumePoolCommand = z.object({
+  type: z.literal("RESUME_POOL"),
+});
+
+/**
+ * Owner-only: cancel a work item that has not started yet (queued, held, or still
+ * handing off). Cancelling a Boss item also cancels its sub-tasks that have not started.
+ */
+export const CancelWorkItemCommand = z.object({
+  type: z.literal("CANCEL_WORK_ITEM"),
+  workItemId: z.string().min(1),
+});
+
 export const CommandSchema = z.discriminatedUnion("type", [
   RunTaskCommand,
   ApprovalDecisionCommand,
@@ -297,6 +311,8 @@ export const CommandSchema = z.discriminatedUnion("type", [
   BossAssignCommand,
   GetOfficeConfigCommand,
   SetOfficeConfigCommand,
+  ResumePoolCommand,
+  CancelWorkItemCommand,
 ]);
 
 export type RunTaskCommand = z.infer<typeof RunTaskCommand>;
@@ -335,4 +351,6 @@ export type RevokeSessionsCommand = z.infer<typeof RevokeSessionsCommand>;
 export type BossAssignCommand = z.infer<typeof BossAssignCommand>;
 export type GetOfficeConfigCommand = z.infer<typeof GetOfficeConfigCommand>;
 export type SetOfficeConfigCommand = z.infer<typeof SetOfficeConfigCommand>;
+export type ResumePoolCommand = z.infer<typeof ResumePoolCommand>;
+export type CancelWorkItemCommand = z.infer<typeof CancelWorkItemCommand>;
 export type Command = z.infer<typeof CommandSchema>;

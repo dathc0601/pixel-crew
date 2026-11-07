@@ -66,6 +66,11 @@ export const WorkItemSchema = z.object({
   selfWork: z.boolean().optional(),
   flags: BossTaskFlagsSchema.optional(),
   error: z.string().optional(),
+  /**
+   * Restored after a daemon restart and paused: it does not start (and spend tokens)
+   * until the owner sends RESUME_POOL, or CANCEL_WORK_ITEM drops it.
+   */
+  held: z.boolean().optional(),
 });
 export type WorkItem = z.infer<typeof WorkItemSchema>;
 

@@ -70,3 +70,20 @@ describe("events", () => {
     assert.deepEqual(e, { type: "LEAD_SELF_WORK", leadId: "lead", workItemId: "w1" });
   });
 });
+
+describe("pool commands, held items and demo info", () => {
+  it("RESUME_POOL / CANCEL_WORK_ITEM parse; CANCEL needs an id", () => {
+    assert.ok(CommandSchema.safeParse({ type: "RESUME_POOL" }).success);
+    assert.ok(CommandSchema.safeParse({ type: "CANCEL_WORK_ITEM", workItemId: "w1" }).success);
+    assert.equal(CommandSchema.safeParse({ type: "CANCEL_WORK_ITEM", workItemId: "" }).success, false);
+    assert.equal(CommandSchema.safeParse({ type: "CANCEL_WORK_ITEM" }).success, false);
+  });
+
+  it("WORK_ITEM_UPDATED carries the optional held flag; GATEWAY_INFO carries demo", () => {
+    const held = GatewayEventSchema.safeParse({ type: "WORK_ITEM_UPDATED", item: { ...item, state: "queued", held: true } });
+    assert.ok(held.success);
+    assert.equal(held.success && held.data.type === "WORK_ITEM_UPDATED" && held.data.item.held, true);
+    assert.ok(GatewayEventSchema.safeParse({ type: "GATEWAY_INFO", demo: true }).success);
+    assert.equal(GatewayEventSchema.safeParse({ type: "GATEWAY_INFO" }).success, false);
+  });
+});
