@@ -1,7 +1,7 @@
 # Fork Improvement Plan: from "Open Office" to a pixel-art AI mini company
 
 Date: 2026-11-07
-Status: owner decisions recorded (§0). Phase 0 merged (2026-11-07). Phase 1 (daemon and UI) implemented on branch `phase-1-boss-flow` (2026-11-07), with a token-free demo mode (`pnpm dev:demo`). Phase 3 (office layout, rooms, art) implemented on branch `phase-3-office-art` (2026-11-07). Phase 4 (performance) implemented on branch `phase-4-performance` (2026-11-07); measurements in `docs/perf/baseline-2026-11-07.md`. Phase 5 (cross-platform builds, mobile remote, pairing v2) implemented on branch `phase-5-cross-platform` (2026-11-07); see `docs/desktop.md` and `docs/mobile.md`. See the status lines under each item.
+Status: owner decisions recorded (§0). Phase 0 merged (2026-11-07). Phase 1 (daemon and UI) implemented on branch `phase-1-boss-flow` (2026-11-07), with a token-free demo mode (`pnpm dev:demo`). Phase 3 (office layout, rooms, art) implemented on branch `phase-3-office-art` (2026-11-07). Phase 4 (performance) implemented on branch `phase-4-performance` (2026-11-07); measurements in `docs/perf/baseline-2026-11-07.md`. Phase 5 (cross-platform builds, mobile remote, pairing v2) implemented on branch `phase-5-cross-platform` (2026-11-07); see `docs/desktop.md` and `docs/mobile.md`. Phase 6 (community polish: docs, releases, extension points, `pnpm demo`) implemented on branch `phase-6-community` (2026-11-07): **v1 complete at 0.2.0**, Phase 2 (multi-vendor) deferred; summary at the top of §6 Phase 6. See the status lines under each item.
 Scope: `~/WebstormProjects/OpenOffice`. `origin` is `github.com/dathc0601/pixel-crew` (renamed from OpenOffice on 2026-11-07); `upstream` is `github.com/longyangxi/OpenOffice` (formerly "bit-office", MIT).
 
 Legend used throughout:
@@ -534,11 +534,62 @@ Each task lists its goal, the files involved, the approach, acceptance criteria,
 
 ### Phase 6 — Community and open-source polish (about 1 week, rolling)
 
+**v1 complete (2026-11-07, version 0.2.0, branch `phase-6-community`).**
+- **Done:**
+  - Phases 0, 1, 3, 4, 5 and 6: safe defaults; the Boss → Lead → Dev walking flow with a daemon-side Dispatcher and lead policy; the zoned office and its art; performance budgets; Windows/Linux/macOS daemon and desktop builds; the phone remote with QR pairing.
+  - Phase 6 adds the docs, release automation, validated extension points, `pnpm demo` and the phone layout fix.
+- **Deferred:**
+  - Phase 2 (multi-vendor: `AgentDriver`, ACP via acpx, Antigravity, hooks-based status, real ACP approvals). v1 is Claude Code only (§0.5). Guide: `docs/adding-a-vendor.md`.
+  - P3.4 (ambient life).
+  - The static in-browser demo on GitHub Pages (P6.4b).
+  - The upstream PR for the P0.1 fix (§0.6, ask the owner).
+- **Needs owner testing on real hardware/accounts:**
+  - a real Claude Code run through the whole Boss flow (spends tokens);
+  - a Windows 11 smoke test with one real CLI (P5.1);
+  - opening the unsigned installers on macOS, Windows and Linux (P5.2);
+  - iOS Safari and Android Chrome against a real gateway: office, assign, approve (P5.3);
+  - Tailscale serve HTTPS (P5.3);
+  - the first release-please release PR, installers attached to the release, and npm publish once `NPM_TOKEN` is added (P6.2).
+
 - **P6.1 (S).** Docs: README with a GIF of the walking flow, quick start (`npx <new-name>`), architecture diagram, and a "how to add a vendor (ACP profile)" guide. Add `CONTRIBUTING.md`, `SECURITY.md` (threat model from §8, private disclosure path) and `CODE_OF_CONDUCT.md`.
+  - **Status: DONE.**
+    - `README.md` was rewritten: demo GIF `docs/media/boss-lead-devs.gif` (458 KB, recorded in demo mode), screenshots, demo-first quick start, office settings, platforms table, security defaults, Mermaid architecture diagram, roadmap and credits. The quick start uses `pnpm demo` / `pnpm start` from source, because the npm package is not published yet.
+    - `README.vi.md` is the Vietnamese version; the two link to each other.
+    - New docs: `docs/adding-a-vendor.md` and `docs/extending.md`.
+    - `CONTRIBUTING.md`, `SECURITY.md` (threat model, GitHub Security Advisories) and `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1).
+    - `.gitignore` no longer hides `docs/`.
 - **P6.2 (S).** Release automation: changesets or release-please, npm publish with provenance, Tauri artifacts on GitHub Releases.
+  - **Status: DONE, not exercised yet** (no tag or release was created).
+    - release-please (`release-please-config.json`, `.release-please-manifest.json` at 0.1.101, bootstrapped at the fork point) keeps a `chore: release x.y.z` PR on master. Its first release will be 0.2.0. It bumps the root, gateway, desktop, `tauri.conf.json` and `Cargo.toml` versions. `Cargo.lock` is refreshed by the next cargo build.
+    - On release, `.github/workflows/release-please.yml` calls `release.yml`, which attaches the installers via tauri-action `releaseId`. A tag pushed by hand gets a draft release.
+    - It also calls `npm-publish.yml`: `pnpm pack` + `npm publish --provenance`, skipped with a notice when there is no `NPM_TOKEN` secret.
+    - `pnpm build:desktop` no longer bumps versions. Steps are in `CONTRIBUTING.md`.
+    - The owner must allow Actions to create PRs (Settings → Actions).
 - **P6.3 (M).** Plugin points: scene adapters (already pluggable), driver profiles, theme packs and role packs (`packages/orchestrator/agents/*.md`). Revisit the unimplemented `docs/specs/2026-03-24-plugin-architecture-*` only where it fits.
+  - **Status: DONE (docs + small typed entry points).**
+    - `docs/extending.md` documents all four extension points.
+    - Theme packs: `parseThemeIndex` (unique ids, no paths). A test loads every shipped theme exactly as written.
+    - Role packs: `parseRolePack` / `listRolePacks`, exported from the orchestrator. Invalid packs are skipped with a warning, and a test covers them.
+    - The scene README now lists the Boss-flow methods.
+    - Driver profiles are design-only until Phase 2. The 2026-03 plugin-architecture specs were not revisited (no runtime plugin loading in v1).
 - **P6.4 (S).** Demo mode without tokens: promote the scripted timeline in `app/office/page.tsx:98-125` to a "watch a demo" button driven by the fake backend, so people can try the office without any CLI installed.
+  - **Status: (a) DONE, (b) SKIPPED.**
+    - (a) `pnpm demo` (`scripts/demo.mjs`) builds the web UI when it is missing or older than its sources, then starts the demo gateway, which serves the UI and opens the browser. Demo projects now live in the demo data dir instead of the start directory.
+    - (b) A static GitHub Pages demo was skipped because it is not a clean change:
+      - Pages serves the site under `/pixel-crew/`, but the UI hard-codes root-absolute paths in about 25 places (fonts CSS, sprite and theme loaders, redirects to `/pair`);
+      - the demo's behavior lives in the daemon (Dispatcher, lead policy and fake agent processes), so the browser would need a recorded event replay or a second implementation of the flow.
+
+      Both are follow-ups (roadmap item 2).
 - **P6.5 (S).** Telemetry: none by default. Document this.
+  - **Status: DONE.**
+    - Verified there is no telemetry: no analytics SDKs, `sendBeacon`, update checks or third-party URLs in `apps/*/src`, `packages/*/src` or the Tauri shell. The only outbound traffic is the AI CLIs and the opt-in Ably, Telegram and `cloudflared`.
+    - Stated in the README ("Security defaults") and in `SECURITY.md` ("Telemetry and privacy").
+- **Polish found during review (Phase 6):**
+  - **DONE:** phones fitted the map to the full canvas, behind the overlays, which left a big black band under the header. Overlays now register as scene insets (`scene/sceneInsets.ts`), and narrow views fit the map's height into the free band. Desktop is unchanged.
+  - **DONE:** the splash screen still said "OPEN OFFICE".
+  - **DONE:** the in-app version label now matches the packages (0.2.0).
+  - **Open:** on phones, a reload reopens the selected agent's chat over the office.
+  - **Open:** on desktop, the Boss shortcuts overlap the console sidebar in console mode.
 
 ---
 

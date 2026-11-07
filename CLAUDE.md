@@ -15,7 +15,8 @@ Fork of longyangxi/OpenOffice (bit-office), MIT. Workspace packages: `pixel-crew
 ## Key Commands
 - `pnpm dev:web` - Start web dev server
 - `pnpm dev:gateway` - Start gateway
-- `pnpm dev:demo` - Start gateway in demo mode (scripted fake agents, no tokens)
+- `pnpm demo` - Build the web UI if stale, then run the demo office on :9090 (scripted fake agents, no tokens)
+- `pnpm dev:demo` - Start gateway in demo mode with reload (:9099)
 - `pnpm typecheck` / `pnpm test` / `pnpm lint` - Checks (CI runs them on ubuntu, macOS, windows)
 - Tests use the fake backend (`id: "fake"`); never start a real AI CLI in tests
 
@@ -69,7 +70,14 @@ TASK_DONE includes structured result (changedFiles, diffStat, testResult).
 - E2E: `pnpm --filter pixel-crew test:e2e` (real gateway in demo mode; `PIXEL_CREW_DEMO_DELAY_SCALE` shortens the script).
 - Pairing v2: `…/pair#<token>` one-time links (`PairingTokenStore`), `/pair/exchange`, device-bound sessions (`SessionTokenStore`, hashed on disk), owner-only `CREATE_PAIR_LINK` / `LIST_DEVICES` / `REVOKE_DEVICE` (`rbac.ts`); QR in `ui/DevicesSection.tsx` and the terminal (`q`). `publicUrl` = Tailscale serve / proxy address. `/connect` refuses proxied requests.
 - Phone UI: office view always on mobile, `ui/ApprovalsTray.tsx`, 44 px targets under `@media (pointer: coarse)` in `styles/global.css`, 15 fps cap (`deviceMaxFps`). Docs: `docs/mobile.md`, `docs/desktop.md`.
-- Desktop: Tauri tray shell on system Node 22+; release builds via `.github/workflows/release.yml` (unsigned artifacts, no releases).
+- Desktop: Tauri tray shell on system Node 22+; installers built by `.github/workflows/release.yml` (unsigned; attached to the GitHub release for a tag, artifacts otherwise).
+
+## Community and releases (Phase 6)
+- Docs: `README.md` + `README.vi.md` (keep both in step), `CONTRIBUTING.md` (incl. release steps), `SECURITY.md` (threat model, no telemetry), `docs/extending.md`, `docs/adding-a-vendor.md`. Media in `docs/media/` (record from demo mode, never show absolute home paths).
+- Versions: one version for root `package.json` (UI label), `apps/gateway`, `apps/desktop`, `tauri.conf.json`, `Cargo.toml`; owned by release-please (`release-please-config.json`, `.github/workflows/release-please.yml`). Don't bump by hand; commit types drive it. npm publish (`npm-publish.yml`) runs only with an `NPM_TOKEN` secret.
+- Extension points: theme packs (`apps/web/public/themes/`, `parseThemeIndex`/`parsePaletteTheme`, tested), role packs (`packages/orchestrator/agents/*.md`, `parseRolePack`, tested), scene adapters (`scene/SceneAdapter.ts`). Phones fit the map between overlays registered with `useSceneInset` (`scene/sceneInsets.ts`); new floating UI over the canvas should register too.
+- No telemetry: no analytics, beacons, update checks or third-party requests.
+- v1 is Claude Code only; multi-vendor (Phase 2) is deferred.
 
 ## Team Execution Flow
 Phases: CREATE → DESIGN → EXECUTE → COMPLETE → (loop or END).
