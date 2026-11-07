@@ -2,6 +2,7 @@ import * as Ably from "ably";
 import { parseGatewayEventLite as parseGatewayEvent } from "@pixel-crew/shared/client";
 import { useOfficeStore } from "@/store/office-store";
 import { getGatewayHttpUrl } from "@/lib/storage";
+import { debugLog } from "@/lib/debug";
 
 let client: Ably.Realtime | null = null;
 let commandsChannel: Ably.RealtimeChannel | null = null;
@@ -54,9 +55,9 @@ export async function connectToAbly(machineId: string, sessionToken?: string) {
 
 export function sendCommand(command: Record<string, unknown>) {
   if (!commandsChannel) throw new Error("Not connected");
-  console.log("[Web] Sending command:", command.type, command);
+  debugLog("[Web] Sending command:", command.type, command);
   commandsChannel.publish(command.type as string, command).then(
-    () => console.log("[Web] Command published OK"),
+    () => debugLog("[Web] Command published OK"),
     (err) => console.error("[Web] Command publish failed:", err),
   );
 }

@@ -4,6 +4,7 @@ import { tunnelRewrite } from "@/components/office/ui/office-utils";
 import { sendCommand } from "@/lib/connection";
 import { handleBossFlowEvent } from "./boss-flow-store";
 import { handleAttachEvent } from "./attach-store";
+import { debugLog } from "@/lib/debug";
 import type { AttachMode } from "@pixel-crew/shared";
 
 /** Pending PICK_FOLDER callbacks: requestId → callback */
@@ -629,7 +630,7 @@ export const useOfficeStore = create<OfficeStore>((set, get) => ({
         }
         case "AGENT_CREATED": {
           if (event.lastMergeCommit !== undefined || event.pendingMerge !== undefined) {
-            console.log(`[Store DEBUG] AGENT_CREATED: agentId=${event.agentId} pendingMerge=${event.pendingMerge} lastMergeCommit=${event.lastMergeCommit} lastMergeMessage=${event.lastMergeMessage}`);
+            debugLog(`[Store DEBUG] AGENT_CREATED: agentId=${event.agentId} pendingMerge=${event.pendingMerge} lastMergeCommit=${event.lastMergeCommit} lastMergeMessage=${event.lastMergeMessage}`);
           }
           const existing = agents.get(event.agentId);
           if (existing) {
@@ -1159,7 +1160,7 @@ export const useOfficeStore = create<OfficeStore>((set, get) => ({
           break;
         }
         case "WORKTREE_MERGED": {
-          console.log(`[Store DEBUG] WORKTREE_MERGED: agentId=${event.agentId} success=${event.success} commitHash=${event.commitHash} commitMessage=${event.commitMessage}`);
+          debugLog(`[Store DEBUG] WORKTREE_MERGED: agentId=${event.agentId} success=${event.success} commitHash=${event.commitHash} commitMessage=${event.commitMessage}`);
           const agent = agents.get(event.agentId);
           if (agent) agents.set(event.agentId, {
             ...agent,
