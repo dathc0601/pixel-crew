@@ -3,6 +3,7 @@ import path from "path";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { CONFIG } from "./config.js";
 import { getDataDir } from "./paths.js";
+import { resolveSpawnPermission, type PermissionPolicy, type SpawnPermission } from "./permissions.js";
 import { resolvePreview } from "./preview-resolver.js";
 import { parseAgentOutput } from "./output-parser.js";
 import { nanoid } from "nanoid";
@@ -174,7 +175,8 @@ export interface AgentSessionOpts {
   workspace: string;
   resumeHistory?: boolean;
   backend: AIBackend;
-  sandboxMode?: "full" | "safe";
+  /** Permission policy lookup per backend id (read at spawn time). Defaults to "auto". */
+  permissionPolicy?: (backendId: string) => PermissionPolicy;
   onEvent: (event: OrchestratorEvent) => void;
   renderPrompt: (templateName: TemplateName, vars: Record<string, string | undefined>) => string;
   /** Whether this agent is the team lead (uses leader template, no tools) */
@@ -202,7 +204,11 @@ export class AgentSession {
   get status(): AgentStatus { return this._status; }
   private pendingApprovals = new Map<string, PendingApproval>();
   private workspace: string;
-  private sandboxMode: "full" | "safe";
+  private permissionPolicy: (backendId: string) => PermissionPolicy;
+  /** True while a spawn is waiting for CEO approval (counts as busy for queueing). */
+  private awaitingSpawnApproval = false;
+  /** Set by cancelTask()/destroy() to abandon a spawn that is waiting for approval. */
+  private spawnApprovalAborted = false;
   private stdoutBuffer = "";
   private stderrBuffer = "";
   private taskInputTokens = 0;
@@ -286,7 +292,7 @@ export class AgentSession {
     this.sessionId = loadSessionMap()[opts.agentId] ?? null;
     this.hasHistory = opts.resumeHistory ?? !!this.sessionId;
     this.backend = opts.backend;
-    this.sandboxMode = opts.sandboxMode ?? "full";
+    this.permissionPolicy = opts.permissionPolicy ?? (() => "auto");
     this._isTeamLead = opts.isTeamLead ?? false;
     this.teamId = opts.teamId;
     this._memoryContext = opts.memoryContext ?? "";
@@ -306,7 +312,7 @@ export class AgentSession {
       this._userCancelled = false;
     }
 
-    if (this.process) {
+    if (this.process || this.awaitingSpawnApproval) {
       const position = this.taskQueue.length + 1;
       this.taskQueue.push({ taskId, prompt, repoPath, teamContext, phaseOverride });
       this.onEvent({
@@ -449,7 +455,14 @@ export class AgentSession {
         const canResume = !isReviewer && this.hasHistory && !!this.sessionId;
         fullPrompt = this._renderPrompt(canResume ? "worker-continue" : workerInitial, templateVars);
       }
-      const fullAccess = this.sandboxMode === "full";
+      // Permission gate: auto mode where the CLI has one; otherwise the CEO approves
+      // this run before anything is spawned. Bypass only via explicit per-backend opt-in.
+      const permission = resolveSpawnPermission(this.backend, this.permissionPolicy(this.backend.id));
+      if (permission.requiresApproval) {
+        const approved = await this.awaitSpawnApproval(taskId, prompt, cwd, permission);
+        if (!approved) return;
+      }
+      const fullAccess = permission.mode === "bypass";
       const verbose = !!process.env.DEBUG;
 
       // IMPORTANT: Only use --resume with a specific session ID, never --continue.
@@ -458,6 +471,7 @@ export class AgentSession {
       const args = this.backend.buildArgs(fullPrompt, {
         continue: false,
         resumeSessionId: this.role.toLowerCase().includes("review") ? undefined : (this.sessionId ?? undefined),
+        permissionMode: permission.mode,
         fullAccess,
         noTools: this._isTeamLead,
         model: this._model,
@@ -956,6 +970,48 @@ export class AgentSession {
   }
 
   /**
+   * Ask the CEO to approve a spawn. Returns true when approved. On denial the task
+   * fails like any other failed run (so delegation results still flow back).
+   * Returns false without emitting anything when the wait was aborted by cancel/destroy.
+   */
+  private async awaitSpawnApproval(taskId: string, prompt: string, cwd: string, permission: SpawnPermission): Promise<boolean> {
+    this.awaitingSpawnApproval = true;
+    this.spawnApprovalAborted = false;
+    console.log(`[Agent ${this.name}] Waiting for approval before spawning ${this.backend.name} (${permission.reason})`);
+    const howItRuns = permission.mode === "auto"
+      ? "It will run in auto permission mode."
+      : "It will run without auto-approval flags; tools that need permission may be refused.";
+    const taskLine = prompt.replace(/\s+/g, " ").trim().slice(0, 200);
+    const decision = await this.requestApproval(
+      `Start ${this.name} (${this.backend.name})?`,
+      `${permission.reason}. ${howItRuns}\nFolder: ${cwd}\nTask: ${taskLine}`,
+      "med",
+    );
+    this.awaitingSpawnApproval = false;
+    if (this.spawnApprovalAborted) {
+      // cancelTask()/destroy() already reported the outcome
+      this.spawnApprovalAborted = false;
+      this.currentTaskId = null;
+      return false;
+    }
+    if (decision === "yes") {
+      this.setStatus("working");
+      return true;
+    }
+    const error = `Run not approved: ${this.backend.name} needs your approval to start (${permission.reason})`;
+    console.log(`[Agent ${this.name}] ${error}`);
+    this.currentTaskId = null;
+    this._lastResult = `failed: ${error.slice(0, 120)}`;
+    this.persistWorkState("cancelled", true);
+    this.setStatus("error");
+    this.onEvent({ type: "task:failed", agentId: this.agentId, taskId, error });
+    this.onTaskComplete?.(this.agentId, taskId, error, false);
+    this.idleTimer = setTimeout(() => { this.idleTimer = null; this.setStatus("idle"); }, CONFIG.timing.idleErrorDelayMs);
+    this.dequeueNext();
+    return false;
+  }
+
+  /**
    * Send a message to the agent's stdin.
    * NOTE: Currently a no-op because stdin is set to "ignore" (pipe causes Claude Code to hang).
    * Future: use --input-format stream-json for bidirectional communication.
@@ -1043,6 +1099,12 @@ export class AgentSession {
     this.taskQueue = [];
     this._userCancelled = true;
 
+    // A spawn waiting for approval is abandoned: nothing was started yet.
+    if (this.awaitingSpawnApproval) {
+      this.spawnApprovalAborted = true;
+      this.resolveApproval("__all__", "no");
+    }
+
     if (this.taskTimeout) { clearTimeout(this.taskTimeout); this.taskTimeout = null; }
     if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null; }
 
@@ -1107,6 +1169,10 @@ export class AgentSession {
         try { this.process.kill("SIGKILL"); } catch { /* already dead */ }
       }
       this.process = null;
+    }
+    if (this.awaitingSpawnApproval) {
+      this.spawnApprovalAborted = true;
+      this.resolveApproval("__all__", "no");
     }
     this.pendingApprovals.clear();
     saveSessionId(this.agentId, null);
@@ -1173,7 +1239,7 @@ export class AgentSession {
 
   private setStatus(status: AgentStatus) {
     // Guard: don't downgrade to "idle" if a task is running or queued
-    if (status === "idle" && (this.process || this.taskQueue.length > 0)) return;
+    if (status === "idle" && (this.process || this.awaitingSpawnApproval || this.taskQueue.length > 0)) return;
     this._status = status;
     this.onEvent({
       type: "agent:status",

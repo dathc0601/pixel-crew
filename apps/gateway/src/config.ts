@@ -34,6 +34,7 @@ interface SavedConfig {
   defaultBackend?: string;
   /** Default model per backend (e.g. { "claude": "opus", "gemini": "gemini-2.5-pro" }) */
   defaultModels?: Record<string, string>;
+  /** @deprecated Ignored. Bypass is per backend: office.backendPermissions[id] = "bypass" */
   sandboxMode?: "full" | "safe";
   worktreeEnabled?: boolean;
   autoMergeEnabled?: boolean;
@@ -202,7 +203,8 @@ function buildConfig() {
     detectedBackends: saved.detectedBackends ?? [],
     defaultBackend: saved.defaultBackend ?? "claude",
     defaultModels: saved.defaultModels ?? { claude: "opus" },
-    sandboxMode: (saved.sandboxMode ?? "full") as "full" | "safe",
+    /** Legacy upstream setting; it no longer grants bypass (see office.backendPermissions) */
+    legacySandboxFull: saved.sandboxMode === "full",
     worktreeEnabled: saved.worktreeEnabled ?? true,
     autoMergeEnabled: saved.autoMergeEnabled ?? true,
     tunnelBaseUrl: (process.env.TUNNEL_BASE_URL || saved.tunnelBaseUrl || "").replace(/\/+$/, "") || undefined,

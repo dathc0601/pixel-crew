@@ -11,6 +11,13 @@ export interface BuildArgsOpts {
   continue?: boolean;
   /** Resume a specific session by ID (preferred over --continue for multi-agent) */
   resumeSessionId?: string;
+  /**
+   * How permissions are handled for this run (see permissions.ts):
+   * "auto" = the CLI's auto mode, "bypass" = explicit opt-in to skip-all flags,
+   * "default" = no permission flags (the run was approved by the CEO).
+   */
+  permissionMode?: import("./permissions.js").SpawnPermissionMode;
+  /** True only when permissionMode is "bypass" (kept for backends that branch on it) */
   fullAccess?: boolean;
   noTools?: boolean;
   /** Override model for this invocation (e.g. "sonnet" for faster leader) */
@@ -73,4 +80,11 @@ export interface AIBackend {
 
   /** Whether this backend outputs structured JSON (stream-json, NDJSON, etc.) */
   supportsStructuredOutput?: boolean;
+
+  /**
+   * Whether the CLI has an "auto" permission mode that is safe to use unattended
+   * (Claude Code: --permission-mode auto). Backends without one need CEO approval
+   * before each spawn unless the owner opts that backend into bypass.
+   */
+  supportsAutoPermission?: boolean;
 }

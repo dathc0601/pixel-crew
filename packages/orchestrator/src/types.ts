@@ -292,8 +292,11 @@ export interface OrchestratorOptions {
   retry?: RetryOptions | false;
   /** FS directory for prompt template overrides */
   promptsDir?: string;
-  /** Sandbox mode: "full" gives agent full access, "safe" restricts */
-  sandboxMode?: "full" | "safe";
+  /**
+   * Permission policy per backend, read at spawn time (so config hot-reload applies
+   * to the next run). Defaults to "auto" for every backend.
+   */
+  permissionPolicy?: (backendId: string) => import("./permissions.js").PermissionPolicy;
 }
 
 export interface CreateAgentOpts {

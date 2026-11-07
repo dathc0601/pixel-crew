@@ -1,44 +1,10 @@
 import { execSync } from "child_process";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
-import { homedir } from "os";
-import path from "path";
+import { existsSync } from "fs";
 import type { AIBackend } from "@pixel-crew/orchestrator";
 
+// Claude Code refuses --dangerously-skip-permissions as root. Running as root at all
+// requires --allow-root (see root-guard.ts); bypass then degrades to auto mode.
 const isRoot = process.getuid?.() === 0;
-
-/**
- * When running as root, --dangerously-skip-permissions is blocked by Claude Code.
- * Instead, configure ~/.claude/settings.json to allow all tool permissions.
- */
-function ensureClaudeSettingsForRoot() {
-  if (!isRoot) return;
-  const claudeDir = path.join(homedir(), ".claude");
-  const settingsPath = path.join(claudeDir, "settings.json");
-  const requiredAllow = [
-    "Bash", "Read", "Write", "Edit", "MultiEdit",
-    "Glob", "Grep", "WebFetch", "TodoRead", "TodoWrite", "Agent",
-  ];
-  try {
-    let settings: Record<string, unknown> = {};
-    if (existsSync(settingsPath)) {
-      settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
-    }
-    // bypassPermissions via settings.json — equivalent to --dangerously-skip-permissions
-    settings.defaultMode = "bypassPermissions";
-    const perms = (settings.permissions ?? {}) as Record<string, unknown>;
-    const existing = Array.isArray(perms.allow) ? perms.allow as string[] : [];
-    const merged = [...new Set([...existing, ...requiredAllow])];
-    perms.allow = merged;
-    settings.permissions = perms;
-    if (!existsSync(claudeDir)) mkdirSync(claudeDir, { recursive: true });
-    writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf-8");
-    console.log("[backends] Running as root — configured Claude Code settings.json to allow all permissions");
-  } catch (err) {
-    console.warn("[backends] Failed to configure Claude settings for root:", err);
-  }
-}
-
-ensureClaudeSettingsForRoot();
 
 const backends: AIBackend[] = [
   // ── Stable backends ───────────────────────────────────────────
@@ -54,9 +20,16 @@ const backends: AIBackend[] = [
     supportsAgentType: true,
     supportsNativeWorktree: true,
     supportsStructuredOutput: true,
+    // --permission-mode auto (verified in Claude Code 2.1.x `claude --help`); re-probed in detectBackends()
+    supportsAutoPermission: true,
     buildArgs(prompt, opts) {
       const args = ["-p", prompt, "--output-format", "stream-json", "--verbose"];
-      if (!isRoot) args.push("--dangerously-skip-permissions");
+      if (opts.permissionMode === "bypass" && !isRoot) {
+        // Only when the owner opted this backend into bypass in config.json
+        args.push("--dangerously-skip-permissions");
+      } else if (opts.permissionMode !== "default") {
+        args.push("--permission-mode", "auto");
+      }
       if (!opts.skipResume) {
         if (opts.resumeSessionId) {
           args.push("--resume", opts.resumeSessionId);
@@ -103,8 +76,9 @@ const backends: AIBackend[] = [
     supportsAgentType: false,
     supportsNativeWorktree: false,
     supportsStructuredOutput: false,
-    buildArgs(prompt) {
-      return ["-p", prompt, "--yolo"];
+    buildArgs(prompt, opts) {
+      // --yolo auto-approves every tool call: only with an explicit bypass opt-in
+      return opts.fullAccess ? ["-p", prompt, "--yolo"] : ["-p", prompt];
     },
   },
 
@@ -156,8 +130,12 @@ const backends: AIBackend[] = [
     supportsAgentType: false,
     supportsNativeWorktree: false,
     supportsStructuredOutput: false,
-    buildArgs(prompt) {
-      return ["--message", prompt, "--yes", "--no-pretty", "--no-git"];
+    buildArgs(prompt, opts) {
+      // --yes auto-confirms every prompt: only with an explicit bypass opt-in
+      const args = ["--message", prompt];
+      if (opts.fullAccess) args.push("--yes");
+      args.push("--no-pretty", "--no-git");
+      return args;
     },
   },
   {
@@ -264,6 +242,29 @@ function toNativeWindowsPath(posixPath: string): string {
   return winPath;
 }
 
+/**
+ * Confirm the installed Claude Code lists "auto" under --permission-mode.
+ * Older CLIs without it fall back to the CEO-approval gate instead of bypass.
+ */
+function probeClaudeAutoMode(backend: AIBackend): void {
+  try {
+    const help = execSync(`"${backend.command}" --help`, { encoding: "utf-8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
+    backend.supportsAutoPermission = hasAutoPermissionMode(help);
+    if (!backend.supportsAutoPermission) {
+      console.warn("[backends] claude: --permission-mode auto not found in `claude --help`; runs will need approval");
+    }
+  } catch {
+    /* keep the static default; spawn errors surface later with a clear message */
+  }
+}
+
+/** True when `claude --help` output lists "auto" among --permission-mode choices. */
+export function hasAutoPermissionMode(helpText: string): boolean {
+  const idx = helpText.indexOf("--permission-mode");
+  if (idx < 0) return false;
+  return /"auto"/.test(helpText.slice(idx, idx + 600));
+}
+
 /** Check which AI CLI tools are installed on this machine.
  *  Also resolves each detected backend's command to its absolute path
  *  so that spawn() works even if the child process env has a different PATH. */
@@ -288,6 +289,7 @@ export function detectBackends(): string[] {
           console.log(`[backends] ${backend.id}: resolved to ${absPath}`);
         }
       } catch { /* keep relative command as fallback */ }
+      if (backend.id === "claude") probeClaudeAutoMode(backend);
       detected.push(backend.id);
     } catch {
       // not installed or wrong binary

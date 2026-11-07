@@ -23,7 +23,7 @@ export async function runSetup(): Promise<void> {
 
   // Non-interactive: save detected backends and move on
   if (!process.stdin.isTTY) {
-    saveConfig({ detectedBackends: detected, defaultBackend: detected[0] ?? "claude", sandboxMode: "full" });
+    saveConfig({ detectedBackends: detected, defaultBackend: detected[0] ?? "claude" });
     console.log("✓ Default config saved to config.json");
     console.log("  Run with --setup in a terminal to configure.\n");
     return;
@@ -60,12 +60,13 @@ export async function runSetup(): Promise<void> {
     }
   }
 
-  // Sandbox mode
+  // Agent permissions (informational: the safe default needs no choice here)
   console.log("\n── Agent Permissions ─────────────────");
-  console.log("1 = Full access (agents can access entire machine)");
-  console.log("2 = Sandbox (agents restricted to working directory)");
-  const sandboxPick = await ask(rl, "Permission mode (1/2, default=1): ");
-  const sandboxMode: "full" | "safe" = sandboxPick === "2" ? "safe" : "full";
+  console.log("Claude Code runs with --permission-mode auto.");
+  console.log("Other CLIs have no auto mode, so you approve each run in the office UI.");
+  console.log("Bypass (skip all permission checks) is off. To opt one backend in, edit config.json:");
+  console.log('  "office": { "backendPermissions": { "codex": "bypass" } }');
+  console.log("Only do that for a backend you trust on this machine.");
 
   // Cloudflare Tunnel
   console.log("\n── Cloudflare Tunnel ─────────────────");
@@ -83,7 +84,6 @@ export async function runSetup(): Promise<void> {
     ablyApiKey: ablyApiKey || undefined,
     detectedBackends: detected,
     defaultBackend,
-    sandboxMode,
     ...(tunnelToken ? { tunnelToken } : {}),
     ...(tunnelBaseUrl ? { tunnelBaseUrl: tunnelBaseUrl.replace(/\/+$/, "") } : {}),
   });
@@ -91,7 +91,7 @@ export async function runSetup(): Promise<void> {
   console.log("\n✓ Config saved to config.json");
   if (ablyApiKey) console.log("  • Ably: enabled");
   console.log(`  • Default AI: ${getBackend(defaultBackend)?.name ?? defaultBackend}`);
-  console.log(`  • Permissions: ${sandboxMode === "full" ? "Full access" : "Sandbox"}`);
+  console.log("  • Permissions: auto (Claude), approval required (other CLIs)");
   if (tunnelToken) console.log(`  • Tunnel: ${tunnelBaseUrl || "(token set, no URL)"}`);
   console.log("  • Run with --setup to reconfigure\n");
 }

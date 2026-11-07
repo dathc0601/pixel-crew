@@ -691,7 +691,9 @@ export const useOfficeStore = create<OfficeStore>((set, get) => ({
         }
         case "AGENT_STATUS": {
           const agent = agents.get(event.agentId) ?? defaultAgent(event.agentId);
-          agents.set(event.agentId, { ...agent, status: event.status });
+          // Leaving waiting_approval (approved, denied or cancelled) dismisses the approval card
+          const pendingApproval = event.status === "waiting_approval" ? agent.pendingApproval : null;
+          agents.set(event.agentId, { ...agent, status: event.status, pendingApproval });
           break;
         }
         case "TASK_STARTED": {

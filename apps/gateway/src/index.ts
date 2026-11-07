@@ -1,9 +1,12 @@
+// Must stay the first import: exits before any files are created when run as root without --allow-root
+import "./root-guard.js";
 import { registerChannel, initTransports, publishEvent, destroyTransports, reinitChannel, isChannelActive } from "./transport.js";
 import { wsChannel, setPairCode, sendToClient, revokeAllSessions } from "./ws-server.js";
 import { generatePairCode } from "./security.js";
 import { ablyChannel } from "./ably-client.js";
 import { telegramChannel, setTelegramAgentDefs, syncTelegramHiredAgents } from "./telegram-channel.js";
-import { config, CONFIG_DIR, hasSetupRun, reloadConfig, saveConfig, officeConfig } from "./config.js";
+import { config, CONFIG_DIR, hasSetupRun, reloadConfig, saveConfig, officeConfig, getOfficeConfig } from "./config.js";
+import { backendPermissionMode } from "@pixel-crew/shared";
 import { runSetup } from "./setup.js";
 import { detectBackends, getBackend, getAllBackends } from "./backends.js";
 import { createOrchestrator, getMergeHistory, previewServer, recordProjectRatings, parseAgentOutput, setSessionDir, setStorageRoot, syncAgentDefs, type Orchestrator, type OrchestratorEvent, type RuntimeOwnerInfo, type TeamPhaseChangedEvent } from "@pixel-crew/orchestrator";
@@ -1259,7 +1262,8 @@ async function main() {
     worktree: config.worktreeEnabled ? { mergeOnComplete: true, alwaysIsolate: true } : false,
     retry: { maxRetries: 2, escalateToLeader: true },
     promptsDir: path.join(CONFIG_DIR, "data", "prompts"),
-    sandboxMode: config.sandboxMode,
+    // Read on every spawn so edits to config.json apply to the next run
+    permissionPolicy: (backendId) => backendPermissionMode(getOfficeConfig(), backendId),
   });
 
   agentDefs = loadAgentDefs();
@@ -1516,7 +1520,14 @@ async function main() {
 
   const backendNames = config.detectedBackends.map((id) => getBackend(id)?.name ?? id).join(", ");
   console.log(`[Gateway] AI backends: ${backendNames || "none detected"} (default: ${getBackend(config.defaultBackend)?.name ?? config.defaultBackend})`);
-  console.log(`[Gateway] Permissions: ${config.sandboxMode === "full" ? "Full access" : "Sandbox"}`);
+  {
+    const office = getOfficeConfig();
+    const bypass = Object.entries(office.backendPermissions).filter(([, m]) => m === "bypass").map(([id]) => id);
+    console.log(`[Gateway] Permissions: ${office.permissionMode} (Claude: --permission-mode auto; other backends ask before each run)${bypass.length ? `; bypass opted in for: ${bypass.join(", ")}` : ""}`);
+    if (config.legacySandboxFull) {
+      console.warn(`[Gateway] config.json has the legacy "sandboxMode": "full", which no longer enables bypass. To opt a backend into bypass, set "office": { "backendPermissions": { "<backend>": "bypass" } }.`);
+    }
+  }
   console.log(`[Gateway] Starting for machine: ${config.machineId}`);
 
   // Generate and display pair code

@@ -26,7 +26,7 @@ const activeChatIds = new Set<number>();
 /** "chatId:userId" -> agentId sticky session (set by /alex, /eli, etc.) */
 const stickyAgent = new Map<string, string>();
 
-/** Allowed TG user IDs (empty = allow all) */
+/** Allowed TG user IDs (empty = deny all) */
 let allowedUsers: string[] = [];
 let isInitialConnect = false;
 
@@ -35,6 +35,11 @@ let hiredAgents: AgentMenuItem[] = [];
 
 /** All agent definitions (fallback for name/role/personality lookup) */
 let allAgentDefs: AgentDefinition[] = [];
+
+/** Empty allowlist = deny all. */
+export function isTelegramUserAllowed(allowed: string[], userId: number | string): boolean {
+  return allowed.length > 0 && allowed.includes(String(userId));
+}
 
 // ---------------------------------------------------------------------------
 // Agent menu (only hired agents; falls back to all defs if none hired)
@@ -198,6 +203,9 @@ export const telegramChannel: Channel = {
     if (!token) return false;
 
     allowedUsers = config.telegramAllowedUsers ?? [];
+    if (allowedUsers.length === 0) {
+      console.warn("[Telegram] telegramAllowedUsers is empty: the bot will ignore everyone. Add your Telegram user ID to enable it.");
+    }
 
     // Takeover only on fresh connect, not when already running
     isInitialConnect = true;
@@ -244,8 +252,11 @@ export const telegramChannel: Channel = {
     bot.on("message", (msg) => {
       if (!msg.text || !msg.from) return;
 
-      // Whitelist check
-      if (allowedUsers.length > 0 && !allowedUsers.includes(String(msg.from.id))) return;
+      // Allowlist check: an empty list denies everyone (the bot would otherwise accept any Telegram user)
+      if (!isTelegramUserAllowed(allowedUsers, msg.from.id)) {
+        console.log(`[Telegram] Ignoring message from user ${msg.from.id} (not in telegramAllowedUsers)`);
+        return;
+      }
 
       activeChatIds.add(msg.chat.id);
       const text = msg.text.trim();

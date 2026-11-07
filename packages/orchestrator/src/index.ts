@@ -20,6 +20,9 @@ export { createWorktree, getManagedWorktreeBranch, getMergeHistory, mergeWorktre
 export type { CleanupWorktreeOptions, MergeResult, RuntimeOwnerInfo, WorktreeOwnerInfo } from "./worktree.js";
 export type { AIBackend, BuildArgsOpts, BackendStability, GuardType } from "./ai-backend.js";
 export { syncAgentDefs } from "./agent-defs.js";
+export { resolveSpawnPermission } from "./permissions.js";
+export type { PermissionPolicy, SpawnPermission, SpawnPermissionMode } from "./permissions.js";
+export { getDataDir } from "./paths.js";
 export type { TeamPhaseInfo } from "./phase-machine.js";
 export type {
   AgentStatus,

@@ -13,6 +13,7 @@ import { finalizeTeamResult } from "./result-finalizer.js";
 import { recordReviewFeedback, recordProjectCompletion, recordTechPreference, getMemoryContext } from "./memory.js";
 import { createWorktree, getManagedWorktreeBranch, mergeWorktree, removeWorktree, revertWorktreeCommit, worktreeHasPendingChanges, syncWorktreeToMain, undoMergeCommit, resetWorktreeToMain, isGitRepo, initGitRepo } from "./worktree.js";
 import type { AIBackend } from "./ai-backend.js";
+import type { PermissionPolicy } from "./permissions.js";
 import type { TeamPreview } from "./result-finalizer.js";
 import type {
   OrchestratorOptions,
@@ -34,7 +35,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEventMap> {
   private backends = new Map<string, AIBackend>();
   private defaultBackendId: string;
   private workspace: string;
-  private sandboxMode: "full" | "safe";
+  private permissionPolicy: (backendId: string) => PermissionPolicy;
   private worktreeEnabled: boolean;
   private worktreeMerge: boolean;
   private worktreeAlwaysIsolate: boolean;
@@ -66,7 +67,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEventMap> {
   constructor(opts: OrchestratorOptions) {
     super();
     this.workspace = opts.workspace;
-    this.sandboxMode = opts.sandboxMode ?? "full";
+    this.permissionPolicy = opts.permissionPolicy ?? (() => "auto");
 
     // Worktree isolation
     if (opts.worktree === false) {
@@ -129,7 +130,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEventMap> {
       resumeHistory: opts.resumeHistory,
       backend,
       model: opts.model,
-      sandboxMode: this.sandboxMode,
+      permissionPolicy: this.permissionPolicy,
       isTeamLead: this.agentManager.isTeamLead(opts.agentId),
       teamId: opts.teamId,
       memoryContext,
