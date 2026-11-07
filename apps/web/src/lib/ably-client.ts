@@ -1,5 +1,5 @@
 import * as Ably from "ably";
-import { parseGatewayEvent } from "@pixel-crew/shared";
+import { parseGatewayEventLite as parseGatewayEvent } from "@pixel-crew/shared/client";
 import { useOfficeStore } from "@/store/office-store";
 import { getGatewayHttpUrl } from "@/lib/storage";
 

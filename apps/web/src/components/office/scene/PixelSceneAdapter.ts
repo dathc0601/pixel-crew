@@ -1,6 +1,6 @@
 import type { SceneAdapter, AgentInfo, BubbleType, BossInfo, HandoffOptions, SceneObjectId, SeatRole } from "./SceneAdapter";
 import type { OfficeState } from "../engine/officeState";
-import { BOSS_AGENT_ID, type AgentStatus } from "@pixel-crew/shared";
+import { BOSS_AGENT_ID, type AgentStatus } from "@pixel-crew/shared/client";
 
 /** Boss look: palette + hue shift that no hired agent gets by default */
 const BOSS_PALETTE = 5;

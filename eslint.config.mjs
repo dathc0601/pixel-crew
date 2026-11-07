@@ -50,6 +50,20 @@ export default tseslint.config(
     rules: {
       "react-hooks/rules-of-hooks": "error",
       "react-hooks/exhaustive-deps": "warn",
+      // Zod stays out of the browser bundle (plan P4.3): runtime values come from the
+      // zod-free "@pixel-crew/shared/client" entry; types may still come from the main one
+      "@typescript-eslint/no-restricted-imports": ["error", {
+        paths: [{
+          name: "@pixel-crew/shared",
+          message: "Import runtime values from \"@pixel-crew/shared/client\" (no Zod in the web bundle).",
+          allowTypeImports: true,
+        }],
+      }],
     },
+  },
+  {
+    // Tests may use the schemas to check the zod-free copies
+    files: ["apps/web/**/__tests__/**"],
+    rules: { "@typescript-eslint/no-restricted-imports": "off" },
   },
 );

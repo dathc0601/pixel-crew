@@ -1,4 +1,4 @@
-import { parseGatewayEvent } from "@pixel-crew/shared";
+import { parseGatewayEventLite as parseGatewayEvent } from "@pixel-crew/shared/client";
 import { useOfficeStore } from "@/store/office-store";
 
 let ws: WebSocket | null = null;

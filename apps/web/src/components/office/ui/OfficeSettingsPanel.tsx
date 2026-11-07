@@ -5,7 +5,7 @@
 // and follows OFFICE_CONFIG broadcasts, so hand edits of the file show up live.
 
 import { useEffect, useRef, useState } from "react";
-import { DEFAULT_OFFICE_CONFIG, HANDOFF_MAX_MS, type OfficeConfig } from "@pixel-crew/shared";
+import { DEFAULT_OFFICE_CONFIG, HANDOFF_MAX_MS, type OfficeConfig } from "@pixel-crew/shared/client";
 import { sendCommand } from "@/lib/connection";
 import { useBossFlowStore } from "@/store/boss-flow-store";
 import TermModal from "./primitives/TermModal";

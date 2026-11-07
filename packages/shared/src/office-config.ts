@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { HANDOFF_MAX_MS } from "./constants";
 
 /**
  * The "office" section of ~/.pixel-crew/config.json.
@@ -14,8 +15,6 @@ export const OfficePermissionModeEnum = z.enum(["auto", "ask"]);
 export const BackendPermissionModeEnum = z.enum(["auto", "ask", "bypass"]);
 export const LeadSelfWorkEnum = z.enum(["never", "urgent_only", "when_no_dev_after_wait"]);
 export const LeadSubagentsEnum = z.enum(["never", "urgent_only", "when_all_devs_busy", "allowed"]);
-
-export const HANDOFF_MAX_MS = 10_000;
 
 export const OfficeConfigSchema = z.object({
   permissionMode: OfficePermissionModeEnum.default("auto"),
@@ -34,8 +33,6 @@ export type OfficePermissionMode = z.infer<typeof OfficePermissionModeEnum>;
 export type BackendPermissionMode = z.infer<typeof BackendPermissionModeEnum>;
 export type OfficeConfig = z.infer<typeof OfficeConfigSchema>;
 export type OfficeConfigInput = z.input<typeof OfficeConfigSchema>;
-
-export const DEFAULT_OFFICE_CONFIG: OfficeConfig = OfficeConfigSchema.parse({});
 
 /** Effective permission policy for one backend. */
 export function backendPermissionMode(cfg: OfficeConfig, backendId: string): BackendPermissionMode {

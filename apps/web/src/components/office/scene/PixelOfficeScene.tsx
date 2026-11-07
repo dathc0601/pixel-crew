@@ -14,7 +14,7 @@ import { EditorState } from "../editor/editorState";
 import { getFurnitureAtTile } from "../editor/editorActions";
 import type { SceneComponentProps } from "./SceneAdapter";
 import { PixelSceneAdapter } from "./PixelSceneAdapter";
-import { BOSS_AGENT_ID } from "@pixel-crew/shared";
+import { BOSS_AGENT_ID } from "@pixel-crew/shared/client";
 
 /** Views this narrow (phones) never shrink the map below NARROW_MIN_ZOOM; they pan instead */
 const NARROW_VIEW_PX = 600;

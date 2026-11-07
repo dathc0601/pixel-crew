@@ -4,7 +4,7 @@
 // only narrow the office's Lead policy; see bossflow/policy.ts.
 
 import { useEffect, useMemo, useState } from "react";
-import { DEFAULT_OFFICE_CONFIG } from "@pixel-crew/shared";
+import { DEFAULT_OFFICE_CONFIG } from "@pixel-crew/shared/client";
 import { sendCommand } from "@/lib/connection";
 import { useBossFlowStore } from "@/store/boss-flow-store";
 import { useOfficeStore } from "@/store/office-store";

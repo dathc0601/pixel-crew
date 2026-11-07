@@ -77,8 +77,6 @@ export type WorkItem = z.infer<typeof WorkItemSchema>;
 export const HandoffKindEnum = z.enum(["boss_to_lead", "lead_to_dev", "dev_to_lead", "dev_to_reviewer"]);
 export type HandoffKind = z.infer<typeof HandoffKindEnum>;
 
-/** Pseudo-agent id of the Boss (the human) in HANDOFF events. */
-export const BOSS_AGENT_ID = "boss";
 
 export const LeadWaitingReasonEnum = z.enum(["all_devs_busy", "pinned_dev_busy", "no_devs", "none"]);
 export type LeadWaitingReason = z.infer<typeof LeadWaitingReasonEnum>;
