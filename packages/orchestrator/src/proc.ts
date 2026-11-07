@@ -19,9 +19,13 @@ import crossSpawn from "cross-spawn";
 
 const isWindows = () => process.platform === "win32";
 
-/** PATH entries from an env (Windows env keys are case-insensitive: Path, PATH). */
+/**
+ * PATH entries from an env. Windows keys are case-insensitive ("Path"), and a copied
+ * `{ ...process.env, PATH }` holds both spellings: the exact "PATH" wins, as it is the one
+ * callers set on purpose.
+ */
 function envPathEntries(env: NodeJS.ProcessEnv): string[] {
-  const key = Object.keys(env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
+  const key = "PATH" in env ? "PATH" : (Object.keys(env).find((k) => k.toUpperCase() === "PATH") ?? "PATH");
   return (env[key] ?? "").split(path.delimiter).map((p) => p.replace(/^"(.*)"$/, "$1")).filter(Boolean);
 }
 

@@ -47,7 +47,9 @@ function installShim(name: string): void {
   }
 }
 installShim("fake-cli");
-const env = { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
+// One PATH key only (Windows spells it "Path"; a spread copy would hold both spellings)
+const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toUpperCase() !== "PATH"));
+env.PATH = `${dir}${path.delimiter}${process.env.PATH ?? ""}`;
 
 function run(command: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
