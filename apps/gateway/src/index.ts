@@ -778,6 +778,9 @@ function handleCommand(parsed: Command, meta: CommandMeta) {
       });
       break;
     }
+    case "SUBSCRIBE_LOGS":
+      // Per-connection; the WebSocket channel handles it. Ably delivers every log to everyone.
+      break;
     case "PING": {
       console.log("[Gateway] Received PING, broadcasting agent statuses");
       // Re-sync Telegram commands with current agent list (catches any drift)

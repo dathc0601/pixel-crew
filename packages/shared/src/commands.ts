@@ -30,6 +30,19 @@ export const PingCommand = z.object({
   type: z.literal("PING"),
 });
 
+/**
+ * Which agents' LOG_APPEND streams this connection wants in full (plan P4.5): the agent
+ * panes that are open. Other agents send only a one-line preview (previews: true, the
+ * default) or nothing (previews: false, e.g. phones). Clients that never send this get
+ * every log in full, as before. Spectators never get logs. Newly added agents get the
+ * current task's output so far as one LOG_APPEND with replace: true.
+ */
+export const SubscribeLogsCommand = z.object({
+  type: z.literal("SUBSCRIBE_LOGS"),
+  agentIds: z.array(z.string()).max(200),
+  previews: z.boolean().optional(),
+});
+
 export const CreateAgentCommand = z.object({
   type: z.literal("CREATE_AGENT"),
   agentId: z.string(),
@@ -274,6 +287,7 @@ export const CancelWorkItemCommand = z.object({
 
 export const CommandSchema = z.discriminatedUnion("type", [
   RunTaskCommand,
+  SubscribeLogsCommand,
   ApprovalDecisionCommand,
   CancelTaskCommand,
   PingCommand,
@@ -319,6 +333,7 @@ export type RunTaskCommand = z.infer<typeof RunTaskCommand>;
 export type ApprovalDecisionCommand = z.infer<typeof ApprovalDecisionCommand>;
 export type CancelTaskCommand = z.infer<typeof CancelTaskCommand>;
 export type PingCommand = z.infer<typeof PingCommand>;
+export type SubscribeLogsCommand = z.infer<typeof SubscribeLogsCommand>;
 export type CreateAgentCommand = z.infer<typeof CreateAgentCommand>;
 export type FireAgentCommand = z.infer<typeof FireAgentCommand>;
 export type OpenFileCommand = z.infer<typeof OpenFileCommand>;

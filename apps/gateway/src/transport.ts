@@ -1,4 +1,5 @@
 import type { GatewayEvent, Command, UserRole } from "@pixel-crew/shared";
+import { LogCoalescer } from "./log-stream.js";
 
 export interface CommandMeta {
   role: UserRole;
@@ -80,15 +81,26 @@ export async function initTransports(commandHandler: (cmd: Command, meta: Comman
   }
 }
 
-/** Broadcast event to all active channels */
-export function publishEvent(event: GatewayEvent) {
+/** LOG_APPEND chunks are batched (~100 ms) before they reach the channels (P4.5) */
+const logStream = new LogCoalescer((event) => {
   for (const ch of channels) {
     ch.broadcast(event);
   }
+});
+
+/** Broadcast event to all active channels */
+export function publishEvent(event: GatewayEvent) {
+  logStream.push(event);
+}
+
+/** The current task's output so far for an agent (sent to a client that opens its pane). */
+export function getLogTail(agentId: string) {
+  return logStream.getTail(agentId);
 }
 
 /** Destroy all channels on shutdown */
 export function destroyTransports() {
+  logStream.flush();
   for (const ch of channels) {
     ch.destroy?.();
   }

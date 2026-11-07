@@ -8,7 +8,8 @@ import { networkInterfaces } from "os";
 import { readFile, stat } from "fs/promises";
 import { join, extname, resolve } from "path";
 import * as Ably from "ably";
-import type { Channel, CommandMeta } from "./transport.js";
+import { getLogTail, type Channel, type CommandMeta } from "./transport.js";
+import { logEventFor, previewOf, type LogSubscription } from "./log-stream.js";
 import { writePortLock } from "./runtime-state.js";
 import { nanoid } from "nanoid";
 import {
@@ -25,7 +26,7 @@ import {
 
 let wss: WebSocketServer | null = null;
 let httpServer: Server | null = null;
-const clients = new Map<WebSocket, { role: UserRole; clientId: string; sessionToken: string }>();
+const clients = new Map<WebSocket, { role: UserRole; clientId: string; sessionToken: string; logs: LogSubscription | null }>();
 let pairCode: string | null = null;
 let onCommand: ((cmd: Command, meta: CommandMeta) => void) | null = null;
 
@@ -423,7 +424,7 @@ export const wsChannel: Channel = {
                       const role = getSessionStore().validate(msg.sessionToken);
                       if (role) {
                         const clientId = nanoid(8);
-                        clients.set(ws, { role, clientId, sessionToken: msg.sessionToken });
+                        clients.set(ws, { role, clientId, sessionToken: msg.sessionToken, logs: null });
                         pendingAuth.delete(ws);
                         clearTimeout(authTimer);
                         console.log(`[WS] Client authenticated as ${role} (total: ${clients.size})`);
@@ -452,6 +453,19 @@ export const wsChannel: Channel = {
                 const clientInfo = clients.get(ws);
                 if (!clientInfo) return; // not authenticated
                 const parsed = CommandSchema.parse(msg);
+                if (parsed.type === "SUBSCRIBE_LOGS") {
+                  // Per-connection state (P4.5): handled here, never reaches the command handler
+                  const before = clientInfo.logs?.agentIds ?? new Set<string>();
+                  clientInfo.logs = { agentIds: new Set(parsed.agentIds), previews: parsed.previews ?? true };
+                  if (clientInfo.role !== "spectator" && ws.readyState === WebSocket.OPEN) {
+                    for (const id of parsed.agentIds) {
+                      if (before.has(id)) continue;
+                      const tail = getLogTail(id);
+                      if (tail) ws.send(JSON.stringify(tail));
+                    }
+                  }
+                  return;
+                }
                 onCommand?.(parsed, { role: clientInfo.role, clientId: clientInfo.clientId });
               } catch (err) {
                 console.error("[WS] Invalid command:", err);
@@ -499,9 +513,18 @@ export const wsChannel: Channel = {
   },
 
   broadcast(event: GatewayEvent) {
-    const data = JSON.stringify(event);
-    for (const [ws] of clients) {
-      if (ws.readyState === WebSocket.OPEN) {
+    let data: string | null = null;
+    let preview: string | null = null;
+    for (const [ws, info] of clients) {
+      if (ws.readyState !== WebSocket.OPEN) continue;
+      // Logs only for open panes, a one-line preview for the rest, none for spectators (P4.5)
+      const mode = event.type === "LOG_APPEND" ? logEventFor(event, info.role, info.logs) : "full";
+      if (mode === "none") continue;
+      if (mode === "preview") {
+        preview ??= JSON.stringify(previewOf(event as Extract<GatewayEvent, { type: "LOG_APPEND" }>));
+        ws.send(preview);
+      } else {
+        data ??= JSON.stringify(event);
         ws.send(data);
       }
     }

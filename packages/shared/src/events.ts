@@ -21,7 +21,12 @@ export const LogAppendEvent = z.object({
   agentId: z.string(),
   taskId: z.string(),
   stream: z.enum(["stdout", "stderr"]),
+  /** One or more output lines; the daemon joins chunks of ~100 ms with "\n" (P4.5) */
   chunk: z.string(),
+  /** The whole output of the task so far: replace what the client has instead of appending */
+  replace: z.boolean().optional(),
+  /** Last line only, for an agent whose pane is not open: a status line, not chat text */
+  preview: z.boolean().optional(),
 });
 
 export const ApprovalNeededEvent = z.object({
