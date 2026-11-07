@@ -15,6 +15,8 @@ export interface FakeBackendOptions {
   supportsAutoPermission?: boolean;
   /** Override the script location */
   scriptPath?: string;
+  /** Accept role packs like Claude (records `--agent <key>`; default false) */
+  supportsAgentType?: boolean;
 }
 
 /**
@@ -31,7 +33,7 @@ export function createFakeBackend(opts: FakeBackendOptions): AIBackend {
     stability: "experimental",
     guardType: "none",
     supportsResume: true,
-    supportsAgentType: false,
+    supportsAgentType: opts.supportsAgentType ?? false,
     supportsNativeWorktree: false,
     supportsStructuredOutput: true,
     supportsAutoPermission: opts.supportsAutoPermission ?? true,
@@ -46,6 +48,7 @@ export function createFakeBackend(opts: FakeBackendOptions): AIBackend {
       else if (o.noTools) args.push("--tools", "");
       if (o.disallowedTools?.length) args.push("--disallowedTools", o.disallowedTools.join(","));
       if (o.model) args.push("--model", o.model);
+      if (o.agentType) args.push("--agent", o.agentType);
       args.push("-p", prompt);
       return args;
     },

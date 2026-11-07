@@ -15,7 +15,8 @@ import { config, CONFIG_DIR, hasSetupRun, reloadConfig, saveConfig, officeConfig
 import { backendPermissionMode } from "@pixel-crew/shared";
 import { runSetup } from "./setup.js";
 import { detectBackends, getBackend, getAllBackends } from "./backends.js";
-import { isPidAlive, createFakeBackend, FAKE_AGENT_SCRIPT, createOrchestrator, openExternal, getMergeHistory, previewServer, recordProjectRatings, parseAgentOutput, setSessionDir, setStorageRoot, syncAgentDefs, type Orchestrator, type OrchestratorEvent, type RuntimeOwnerInfo, type TeamPhaseChangedEvent } from "@pixel-crew/orchestrator";
+import { setupRolePacks } from "./role-packs.js";
+import { isPidAlive, createFakeBackend, FAKE_AGENT_SCRIPT, createOrchestrator, openExternal, getMergeHistory, previewServer, recordProjectRatings, parseAgentOutput, setSessionDir, setStorageRoot, type Orchestrator, type OrchestratorEvent, type RuntimeOwnerInfo, type TeamPhaseChangedEvent } from "@pixel-crew/orchestrator";
 import type { Command, GatewayEvent, UserRole, WorkItem as WireWorkItem } from "@pixel-crew/shared";
 import type { WorkItem } from "@pixel-crew/orchestrator";
 import { broadcastOfficeConfigChanges, handleOfficeConfigCommand, isOfficeConfigCommand } from "./office-config-commands.js";
@@ -1469,8 +1470,8 @@ async function main() {
     }]
     : getAllBackends();
 
-  // Sync bundled agent definitions to ~/.claude/agents/ for --agent resolution
-  if (!DEMO_MODE) syncAgentDefs();
+  // Role packs reach Claude per run via --agents <data dir file>; never written to ~/.claude/
+  setupRolePacks({ demo: DEMO_MODE, dataDir: CONFIG_DIR });
 
   // Scope session storage to this gateway instance (prevents Tauri/Web/CLI context contamination)
   setSessionDir(config.instanceDir);

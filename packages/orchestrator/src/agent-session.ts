@@ -13,6 +13,7 @@ import type { AIBackend } from "./ai-backend.js";
 import type { AgentStatus, TaskResultPayload, OrchestratorEvent, LogActivityEvent } from "./types.js";
 import type { TemplateName } from "./prompt-templates.js";
 import { parseDelegationLine } from "./work-item.js";
+import { resolveRolePackKey } from "./agent-defs.js";
 import { SUBAGENT_TOOL_NAMES, SUBAGENT_TOOLS_ALLOW, type LeadRunPolicy } from "./lead-policy.js";
 import type { RunEndReason } from "./dispatcher.js";
 import { isVirtualRun, type AgentDriver, type DriverRunSpec } from "./drivers/driver.js";
@@ -470,11 +471,15 @@ export class AgentSession {
 
       // Resolve subagent type for backends that support it (e.g. Claude Code --agent).
       // Uses the backend.supportsAgentType flag instead of hardcoded id check.
+      // subagentRole picks the prompt template (as before); agentType is the role pack's
+      // --agents key and is set only when a bundled pack matches the role title.
+      let subagentRole: string | undefined;
       let agentType: string | undefined;
       if (this.backend.supportsAgentType && !this._isTeamLead && !borrowsSession) {
         const roleName = this.role.split(/\s*[—–]\s*/)[0].trim();
         if (roleName && roleName.length > 2) {
-          agentType = roleName;
+          subagentRole = roleName;
+          agentType = resolveRolePackKey(roleName);
         }
       }
 
@@ -499,11 +504,11 @@ export class AgentSession {
       } else {
         let workerInitial: TemplateName;
         const isReviewer = this.role.toLowerCase().includes("review");
-        if (isReviewer && agentType) {
+        if (isReviewer && subagentRole) {
           workerInitial = "worker-subagent-reviewer-initial";
         } else if (isReviewer) {
           workerInitial = "worker-reviewer-initial";
-        } else if (agentType) {
+        } else if (subagentRole) {
           const isDevRole = /developer|engineer|architect|scripter|builder|prototyper|coder/i.test(this.role);
           workerInitial = isDevRole ? "worker-subagent-dev-initial" : "worker-subagent-initial";
         } else {

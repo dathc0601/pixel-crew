@@ -31,7 +31,10 @@ export interface BuildArgsOpts {
   verbose?: boolean;
   /** Skip session resume for this invocation (leader state-summary mode) */
   skipResume?: boolean;
-  /** Run as a specific subagent type (e.g. "Game Designer" → --agent "Game Designer") */
+  /**
+   * Run as this role pack: its `--agents` key (e.g. "pixel-crew-game-designer"), set only
+   * when a bundled pack matches the role. Claude adds `--agents <file> --agent <key>`.
+   */
   agentType?: string;
   /** Use native worktree isolation (Claude Code --worktree) */
   worktree?: boolean;

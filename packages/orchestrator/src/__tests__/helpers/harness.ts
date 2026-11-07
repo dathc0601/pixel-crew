@@ -44,6 +44,8 @@ export function createHarness(opts: {
   rules: ScenarioRule[];
   defaultRule?: ScenarioRule;
   supportsAutoPermission?: boolean;
+  /** Fake backend accepts role packs (--agent) like Claude */
+  supportsAgentType?: boolean;
   permissionPolicy?: (backendId: string) => PermissionPolicy;
   /** Hand-off duration (default 0 so runs stay fast) */
   handoffDurationMs?: () => number;
@@ -64,7 +66,7 @@ export function createHarness(opts: {
 
   const orc = createOrchestrator({
     workspace,
-    backends: [createFakeBackend({ scenarioFile, recordFile, supportsAutoPermission: opts.supportsAutoPermission })],
+    backends: [createFakeBackend({ scenarioFile, recordFile, supportsAutoPermission: opts.supportsAutoPermission, supportsAgentType: opts.supportsAgentType })],
     defaultBackend: "fake",
     worktree: false,
     retry: false,

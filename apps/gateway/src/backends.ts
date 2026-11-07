@@ -6,6 +6,15 @@ import { createFakeBackend, resolveCommand, spawnPortableSync, type AIBackend } 
 // requires --allow-root (see root-guard.ts); bypass then degrades to auto mode.
 const isRoot = process.getuid?.() === 0;
 
+// Role packs reach Claude per run as `--agents <file>` (written by writeClaudeAgentsFile at
+// startup into the Pixel Crew data dir); never through ~/.claude/agents/.
+let claudeAgentsFile: string | undefined;
+
+/** Point Claude runs at the `--agents` JSON file; undefined turns role packs off. */
+export function setClaudeAgentsFile(file: string | undefined): void {
+  claudeAgentsFile = file;
+}
+
 const backends: AIBackend[] = [
   // ── Stable backends ───────────────────────────────────────────
   {
@@ -42,7 +51,9 @@ const backends: AIBackend[] = [
       else if (opts.noTools) args.push("--tools", "");
       if (opts.disallowedTools?.length) args.push("--disallowedTools", opts.disallowedTools.join(","));
       if (opts.model) args.push("--model", opts.model);
-      if (opts.agentType) args.push("--agent", opts.agentType);
+      // --agents takes a file path only with -p (claude --help, 2.1.319); -p is always set above.
+      // --agent names a key in that file, so pass it only together with the file.
+      if (opts.agentType && claudeAgentsFile) args.push("--agents", claudeAgentsFile, "--agent", opts.agentType);
       if (opts.worktree) args.push("--worktree");
       return args;
     },

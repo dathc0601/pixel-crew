@@ -25,7 +25,7 @@ export type { ReviewPattern, ProjectRecord } from "./memory.js";
 export { createWorktree, getManagedWorktreeBranch, getMergeHistory, mergeWorktree, removeWorktree, removeWorktreeOnly, checkConflicts, cleanupStaleWorktrees, getIsolatedGitEnv, getWorktreeBaseDir, resolveGitWorkspaceRoot } from "./worktree.js";
 export type { CleanupWorktreeOptions, MergeResult, RuntimeOwnerInfo, WorktreeOwnerInfo } from "./worktree.js";
 export type { AIBackend, BuildArgsOpts, BackendStability, GuardType } from "./ai-backend.js";
-export { syncAgentDefs, listRolePacks, parseRolePack, type RolePack } from "./agent-defs.js";
+export { listRolePacks, parseRolePack, parseRolePackDefinition, rolePackKey, resolveRolePackKey, buildClaudeAgentsConfig, writeClaudeAgentsFile, getBundledAgentsDir, ROLE_PACK_KEY_PREFIX, type RolePack, type RolePackDefinition, type ClaudeAgentDefinition } from "./agent-defs.js";
 export { resolveSpawnPermission } from "./permissions.js";
 export type { PermissionPolicy, SpawnPermission, SpawnPermissionMode } from "./permissions.js";
 export { getDataDir } from "./paths.js";
