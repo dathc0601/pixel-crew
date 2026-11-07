@@ -1,0 +1,99 @@
+name: Desktop builds
+
+# Builds unsigned desktop installers for macOS, Windows and Linux and uploads them as
+# workflow artifacts. It never creates a tag or a GitHub release: tauri-action only
+# publishes when tagName/releaseId are set, and they are not set here.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            os: macos-latest
+            rust-target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
+          - name: macos-x64
+            os: macos-latest
+            rust-target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin
+          - name: windows-x64
+            os: windows-latest
+            rust-target: ""
+            args: ""
+          - name: linux-x64
+            os: ubuntu-22.04
+            rust-target: ""
+            args: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+          key: ${{ matrix.name }}
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # beforeBuildCommand (scripts/build-desktop.mjs) builds the web UI and the gateway
+      # bundle. Node.js is not bundled: the app runs on the user's Node.js 22+.
+      - name: Build the app (unsigned)
+        id: tauri
+        uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: apps/desktop
+          tauriScript: pnpm tauri
+          args: ${{ matrix.args }}
+
+      - name: Installer sizes
+        shell: bash
+        run: |
+          find apps/desktop/src-tauri/target -path '*/release/bundle/*' \
+            \( -name '*.dmg' -o -name '*-setup.exe' -o -name '*.deb' -o -name '*.AppImage' \) \
+            -exec ls -l {} \;
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixel-crew-${{ matrix.name }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            apps/desktop/src-tauri/target/**/release/bundle/dmg/*.dmg
+            apps/desktop/src-tauri/target/**/release/bundle/nsis/*-setup.exe
+            apps/desktop/src-tauri/target/**/release/bundle/deb/*.deb
+            apps/desktop/src-tauri/target/**/release/bundle/appimage/*.AppImage
