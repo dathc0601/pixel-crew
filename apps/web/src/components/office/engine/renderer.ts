@@ -625,6 +625,28 @@ export function renderNameBadges(
     ctx.textBaseline = 'top'
     ctx.fillText(ch.label, badgeX + padX, badgeY + padY)
 
+    // Attached session (Phase 2a): a small chain-link tag right of the label
+    if (ch.attached) {
+      const tagX = badgeX + boxW + 2 * px
+      const tagW = 7 * px
+      ctx.fillStyle = '#222'
+      ctx.fillRect(tagX - px, badgeY, tagW + 2 * px, boxH + px)
+      ctx.fillRect(tagX, badgeY - px, tagW, boxH + 2 * px)
+      ctx.fillStyle = bgColor
+      ctx.fillRect(tagX, badgeY, tagW, boxH)
+      // Two interlocked links, 1 px outlines
+      ctx.fillStyle = '#fff'
+      const midY = badgeY + Math.round(boxH / 2) - px
+      const link = (x: number, y: number) => {
+        ctx.fillRect(x, y, 3 * px, px)
+        ctx.fillRect(x, y + 2 * px, 3 * px, px)
+        ctx.fillRect(x, y, px, 3 * px)
+        ctx.fillRect(x + 2 * px, y, px, 3 * px)
+      }
+      link(tagX + px, midY - px)
+      link(tagX + 3 * px, midY)
+    }
+
     ctx.restore()
   }
 }

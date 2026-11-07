@@ -66,6 +66,8 @@ export interface SceneAdapter {
   snapToSeats?(): void;
   /** An agent's team role changed (e.g. it became the Lead): move it to a fitting desk. */
   setSeatRole?(agentId: string, role: SeatRole | undefined): void;
+  /** Label/kind changed after it joined: an external session joined or left the team (Phase 2a). */
+  updateAgentInfo?(agentId: string, info: { label: string; labelColor: string; isExternal: boolean; attached: boolean }): void;
   /** Clicks on the Boss or the task board. */
   setObjectClickHandler?(handler: ((id: SceneObjectId) => void) | null): void;
 }

@@ -48,6 +48,11 @@ export class PixelSceneAdapter implements SceneAdapter {
     this.wake();
   }
 
+  updateAgentInfo(agentId: string, info: { label: string; labelColor: string; isExternal: boolean; attached: boolean }): void {
+    this.officeState.updateCharacterInfo(agentId, info);
+    this.wake();
+  }
+
   removeAgent(agentId: string): void {
     this.officeState.removeCharacter(agentId);
     this.wake();

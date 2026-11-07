@@ -8,6 +8,7 @@ import { TermButton, TermInput, TermEmpty } from "./primitives";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { ChatMessage } from "@/store/office-store";
+import AttachPanel from "../attach/AttachPanel";
 import dynamic from "next/dynamic";
 
 const MessageBubble = dynamic(() => import("./MessageBubble"), { ssr: false });
@@ -612,6 +613,7 @@ const AgentPane = memo(function AgentPane(props: AgentPaneProps) {
               </span>
             </div>
           </div>
+          <AttachPanel agentId={agentId} isOwner={isOwner} />
 
           {/* Scrollable messages */}
           <div data-scrollbar className="crt-screen flex-1 overflow-y-auto px-2.5 py-2 flex flex-col min-h-0">
@@ -811,6 +813,7 @@ const AgentPane = memo(function AgentPane(props: AgentPaneProps) {
           onDrop={(e) => { e.currentTarget.style.outline = "none"; onDropImage(e); }}
           className="crt-screen flex-1 flex flex-col bg-background min-h-0 overflow-hidden"
         >
+          <AttachPanel agentId={agentId} isOwner={isOwner} />
           {/* Messages */}
           <div className="relative flex-1 min-h-0 flex flex-col">
             <div ref={scrollContainerRef} data-scrollbar className="term-dotgrid term-chat-area flex-1 overflow-y-auto px-3.5 pt-3.5 pb-2.5 flex flex-col min-h-0">

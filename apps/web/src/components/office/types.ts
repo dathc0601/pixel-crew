@@ -244,6 +244,8 @@ export interface Character {
   matrixEffectSeeds: number[]
   /** Whether this character represents an external (non-managed) process */
   isExternal: boolean
+  /** A Claude Code session the owner started elsewhere that joined the team (badge next to the label) */
+  attached?: boolean
   /** Label shown above character (agent name or PID for external) */
   label: string | null
   /** Background color for the label badge */

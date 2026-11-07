@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useOfficeStore, imageUploadCallbacks } from "@/store/office-store";
+import { useAttachSectionSync } from "@/components/office/attach/useAttachSectionSync";
 import { connect, sendCommand } from "@/lib/connection";
 import { getConnection } from "@/lib/storage";
 import { nanoid } from "nanoid";
@@ -660,6 +661,7 @@ export default function OfficePage() {
       setExpandedSection("team");
     }
   }, [agents, selectedAgent]);
+  useAttachSectionSync(selectedAgent, expandedSection, setExpandedSection);
 
   const handleAgentClick = useCallback((agentId: string) => {
     setSelectedAgent(agentId);

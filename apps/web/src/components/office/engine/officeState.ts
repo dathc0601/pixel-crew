@@ -354,6 +354,40 @@ export class OfficeState {
   }
 
   /**
+   * Label, colour and kind changed (an external session joined or left the team). Joining
+   * sends it to its new desk right away; leaving frees the desk and it wanders off.
+   */
+  updateCharacterInfo(agentId: string, info: { label: string; labelColor: string; isExternal: boolean; attached: boolean }): void {
+    const charId = this.agentIdToCharId.get(agentId)
+    const ch = charId !== undefined ? this.characters.get(charId) : undefined
+    if (!ch || ch.isBoss) return
+    const joined = info.attached && !ch.attached
+    const left = !info.attached && !!ch.attached
+    ch.label = info.label
+    ch.labelColor = info.labelColor
+    ch.isExternal = info.isExternal
+    ch.attached = info.attached
+    if (joined && !this.choreo.isBusy(ch.id) && ch.state !== CharacterState.TYPE) {
+      // Walk to the dev desk now instead of after the usual wander
+      ch.wanderCount = ch.wanderLimit
+      ch.wanderTimer = 0.3
+    }
+    if (left && ch.seatId) {
+      const seat = this.seats.get(ch.seatId)
+      if (seat) seat.assigned = false
+      ch.seatId = null
+      ch.seatRole = undefined
+      if (ch.state === CharacterState.TYPE) {
+        ch.state = CharacterState.IDLE
+        ch.frame = 0
+        ch.wanderTimer = 0.3
+      }
+      this.rebuildFurnitureInstances()
+    }
+    this.markDirty()
+  }
+
+  /**
    * Set the desk preference of an agent (its team role can arrive after it joined).
    * When the role changes the agent gives up its desk and walks to one that fits.
    */

@@ -4,13 +4,14 @@ import { useEffect, useRef } from "react";
 import { useOfficeStore } from "@/store/office-store";
 import type { SceneAdapter, BubbleType, SeatRole } from "./SceneAdapter";
 
-import { TERM_SEM_BLUE, TERM_SEM_YELLOW, TERM_DIM } from "../ui/termTheme";
+import { TERM_SEM_BLUE, TERM_SEM_YELLOW, TERM_DIM, TERM_SEM_PURPLE } from "../ui/termTheme";
 
 /** Agent type colors for name badges */
 function getAgentTypeColors() {
   return {
     external: TERM_SEM_BLUE,
     team: TERM_SEM_YELLOW,
+    attached: TERM_SEM_PURPLE,
     normal: TERM_DIM,
   };
 }
@@ -19,6 +20,7 @@ const AGENT_TYPE_COLORS = getAgentTypeColors();
 function getAgentLabel(agent: {
   name: string;
   isExternal?: boolean;
+  attached?: boolean;
   pid?: number;
   teamId?: string;
 }): { label: string; color: string } {
@@ -26,6 +28,7 @@ function getAgentLabel(agent: {
     return { label: `${agent.pid ?? "?"}`, color: AGENT_TYPE_COLORS.external };
   }
   const short = agent.name.split(/[\s(]/)[0];
+  if (agent.attached) return { label: short, color: AGENT_TYPE_COLORS.attached };
   const color = agent.teamId ? AGENT_TYPE_COLORS.team : AGENT_TYPE_COLORS.normal;
   return { label: short, color };
 }
@@ -58,6 +61,8 @@ export function useSceneBridge(
   const prevMsgCountRef = useRef<Map<string, number>>(new Map());
   const prevLogLineRef = useRef<Map<string, string | null>>(new Map());
   const prevTeamMsgCountRef = useRef(0);
+  /** label|color|external|attached per agent, to notice an external session joining or leaving */
+  const prevInfoRef = useRef<Map<string, string>>(new Map());
 
   // Seed existing agents when adapter first becomes available
   useEffect(() => {
@@ -75,6 +80,8 @@ export function useSceneBridge(
         seatRole: deriveSeatRole(agent),
       });
       adapter.updateAgent(agentId, agent.status, deriveBubble(agent), !!agent.teamId);
+      if (agent.attached) adapter.updateAgentInfo?.(agentId, { label, labelColor, isExternal: false, attached: true });
+      prevInfoRef.current.set(agentId, `${label}|${labelColor}|${!!agent.isExternal}|${!!agent.attached}`);
       knownAgentsRef.current.add(agentId);
       prevMsgCountRef.current.set(agentId, agent.messages.length);
       prevLogLineRef.current.set(agentId, state.agentLogLines.get(agentId) ?? agent.lastLogLine ?? null);
@@ -85,6 +92,7 @@ export function useSceneBridge(
       knownAgentsRef.current.clear();
       prevMsgCountRef.current.clear();
       prevLogLineRef.current.clear();
+      prevInfoRef.current.clear();
       prevTeamMsgCountRef.current = 0;
     };
   }, [adapter]);
@@ -107,12 +115,22 @@ export function useSceneBridge(
             palette: agent.palette,
             seatRole: deriveSeatRole(agent),
           });
+          if (agent.attached) adapter.updateAgentInfo?.(agentId, { label, labelColor, isExternal: false, attached: true });
+          prevInfoRef.current.set(agentId, `${label}|${labelColor}|${!!agent.isExternal}|${!!agent.attached}`);
           knownAgentsRef.current.add(agentId);
         }
         adapter.setSeatRole?.(agentId, deriveSeatRole(agent));
 
         // Team members keep their seat when inactive (done/idle), solo agents release it
         adapter.updateAgent(agentId, agent.status, deriveBubble(agent), !!agent.teamId);
+
+        const { label, color: labelColor } = getAgentLabel(agent);
+        const infoKey = `${label}|${labelColor}|${!!agent.isExternal}|${!!agent.attached}`;
+        const prevInfo = prevInfoRef.current.get(agentId);
+        if (prevInfo !== undefined && prevInfo !== infoKey) {
+          adapter.updateAgentInfo?.(agentId, { label, labelColor, isExternal: !!agent.isExternal, attached: !!agent.attached });
+        }
+        prevInfoRef.current.set(agentId, infoKey);
 
         // Detect new agent messages -> speech bubble
         const prevCount = prevMsgCountRef.current.get(agentId) ?? 0;
@@ -150,6 +168,7 @@ export function useSceneBridge(
         if (!currentIds.has(agentId)) {
           adapter.removeAgent(agentId);
           knownAgentsRef.current.delete(agentId);
+          prevInfoRef.current.delete(agentId);
           prevMsgCountRef.current.delete(agentId);
           prevLogLineRef.current.delete(agentId);
         }

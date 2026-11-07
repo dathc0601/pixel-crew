@@ -3,6 +3,8 @@ import type { AgentStatus, GatewayEvent, TaskResultPayload, AgentDefinition, Use
 import { tunnelRewrite } from "@/components/office/ui/office-utils";
 import { sendCommand } from "@/lib/connection";
 import { handleBossFlowEvent } from "./boss-flow-store";
+import { handleAttachEvent } from "./attach-store";
+import type { AttachMode } from "@pixel-crew/shared";
 
 /** Pending PICK_FOLDER callbacks: requestId → callback */
 export const folderPickCallbacks = new Map<string, (path: string) => void>();
@@ -58,6 +60,11 @@ interface AgentState {
   isTeamLead?: boolean;
   teamId?: string;
   isExternal?: boolean;
+  /** Attached Claude session (Phase 2a): mode, one-line note, or the ways an external one can join */
+  attached?: boolean;
+  attachMode?: AttachMode;
+  attachNote?: string;
+  attachOptions?: Array<{ mode: AttachMode; note: string }>;
   pid?: number;
   cwd?: string;
   workDir?: string;
@@ -605,7 +612,7 @@ export const useOfficeStore = create<OfficeStore>((set, get) => ({
 
   handleEvent: (event) => {
     // Boss flow (work items, hand-offs, office config) lives in boss-flow-store.ts
-    if (handleBossFlowEvent(event)) return;
+    if (handleBossFlowEvent(event) || handleAttachEvent(event)) return;
     set((state) => {
       const agents = new Map(state.agents);
 
@@ -634,8 +641,13 @@ export const useOfficeStore = create<OfficeStore>((set, get) => ({
               personality: event.personality ?? existing.personality,
               backend: event.backend ?? existing.backend,
               isTeamLead: event.isTeamLead ?? existing.isTeamLead,
-              teamId: event.teamId ?? existing.teamId,
+              // An attached session that leaves the team is external again: no team any more
+              teamId: event.isExternal ? undefined : (event.teamId ?? existing.teamId),
               isExternal: event.isExternal ?? existing.isExternal,
+              attached: event.attached ?? existing.attached,
+              attachMode: event.attached === false ? undefined : (event.attachMode ?? existing.attachMode),
+              attachNote: event.attached === false ? undefined : (event.attachNote ?? existing.attachNote),
+              attachOptions: event.isExternal ? event.attachOptions : undefined,
               pid: event.pid ?? existing.pid,
               cwd: event.cwd ?? existing.cwd,
               workDir: event.workDir ?? existing.workDir,
@@ -656,6 +668,10 @@ export const useOfficeStore = create<OfficeStore>((set, get) => ({
             agent.isTeamLead = event.isTeamLead ?? saved?.isTeamLead;
             agent.teamId = event.teamId ?? saved?.teamId;
             agent.isExternal = event.isExternal;
+            agent.attached = event.attached;
+            agent.attachMode = event.attachMode;
+            agent.attachNote = event.attachNote;
+            agent.attachOptions = event.attachOptions;
             agent.pid = event.pid;
             agent.cwd = event.cwd;
             agent.workDir = event.workDir;
