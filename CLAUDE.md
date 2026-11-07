@@ -51,6 +51,12 @@ TASK_DONE includes structured result (changedFiles, diffStat, testResult).
 - UI: `apps/web/src/store/boss-flow-store.ts`, `components/office/bossflow/`, `engine/choreography.ts` (walks), `engine/bossFlowRenderer.ts`, `ui/BossFlowLayer.tsx` (+ `BossComposer`, `TaskQueueDialog`, `OfficeSettingsPanel`). Keep new features out of `app/office/page.tsx` and `office-store.ts`.
 - Demo mode: `pnpm dev:demo` (or `--demo` / `PIXEL_CREW_DEMO=1`): every agent is the scripted fake backend (`apps/gateway/src/demo-mode.ts`), data dir `~/.pixel-crew-demo` unless `PIXEL_CREW_HOME` is set, DEMO badge in the UI. Never enabled from config.json.
 
+## Office layout (Phase 3)
+- Layout v2 = v1 + optional per-tile `zones` (`boss_room | lead_area | dev_area | meeting | pantry`); seat rules in `components/office/layout/zones.ts`, default plan in `layout/defaultOffice.ts`.
+- Art is drawn in code (`sprites/officeArt.ts`, `sprites/bossLook.ts`); only CC0/MIT/own assets, each recorded in `THIRD_PARTY_NOTICES.md`.
+- Extra themes are data-only palette JSON in `apps/web/public/themes/` (`layout/themes.ts`).
+- Render budget: 0 renders when nobody works; working agents tick at ~7 fps (`TYPE_FRAME_DURATION_SEC`).
+
 ## Team Execution Flow
 Phases: CREATE → DESIGN → EXECUTE → COMPLETE → (loop or END).
 Execute: Leader → Dev (build+self-fix) → Reviewer (VERDICT) → Fix loop (max 3 reviews).

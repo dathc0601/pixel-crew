@@ -1,7 +1,7 @@
 # Fork Improvement Plan: from "Open Office" to a pixel-art AI mini company
 
 Date: 2026-11-07
-Status: owner decisions recorded (§0). Phase 0 merged (2026-11-07). Phase 1 (daemon and UI) implemented on branch `phase-1-boss-flow` (2026-11-07), with a token-free demo mode (`pnpm dev:demo`). See the status lines under each item.
+Status: owner decisions recorded (§0). Phase 0 merged (2026-11-07). Phase 1 (daemon and UI) implemented on branch `phase-1-boss-flow` (2026-11-07), with a token-free demo mode (`pnpm dev:demo`). Phase 3 (office layout, rooms, art) implemented on branch `phase-3-office-art` (2026-11-07). See the status lines under each item.
 Scope: `~/WebstormProjects/OpenOffice`. `origin` is `github.com/dathc0601/pixel-crew` (renamed from OpenOffice on 2026-11-07); `upstream` is `github.com/longyangxi/OpenOffice` (formerly "bit-office", MIT).
 
 Legend used throughout:
@@ -441,15 +441,22 @@ Each task lists its goal, the files involved, the approach, acceptance criteria,
 ### Phase 3 — Office layout, rooms and art (about 2–3 weeks, parallelizable)
 
 **P3.1 Zones/rooms in the layout schema (M).**
+- **Status: DONE.** Layout v2 adds an optional per-tile zone map (`boss_room`, `lead_area`, `dev_area`, `meeting`, `pantry`; v1 loads unchanged), `layout/zones.ts` seat rules (Boss → boss_room, Lead → first Lead-area desk, reviewer beside it, devs → dev desks in reading order), walks through two-tile doorways, a Zones tool in the (hidden) layout editor. New default plan in `layout/defaultOffice.ts`; phones get a 1.4× floor with sideways pan.
 - *Files:* `components/office/types.ts` (`OfficeLayout`: add `zones: {id, kind: "boss"|"lead"|"dev"|"meeting"|"board"|"lounge", rect}`, plus door tiles), `layout/layoutSerializer.ts` (bump the version and migrate), the editor tools in `components/office/editor/*`.
 - *Approach:* Seat assignment respects zones: the Boss goes in the boss zone, the Lead in the lead zone, devs in the dev zone, and visitors in the lounge. Pathfinding already treats doorways as walkable (`tileMap.ts:9`).
 - *Acceptance:* A default layout with a Boss room and a Dev room (with a lead area); characters path through doors.
 
-**P3.2 New CC0/MIT art set (L).** Make a 16×16 tileset and furniture (desks, chairs, cabinets, document stacks, windows, task board, plants) from Kenney CC0 and/or pixel-agents' MIT open-source assets. Add a Boss sprite (suit/tie variant) and a "paper" hand-off prop. Record each asset's source in `THIRD_PARTY_NOTICES.md` and an `assets/CREDITS.json` manifest. *Acceptance:* The release build contains no asset without a recorded license.
+**P3.2 New CC0/MIT art set (L).** **Status: DONE** with original art drawn in code (`sprites/officeArt.ts`, Boss suit in `sprites/bossLook.ts`) plus reused pixel-agents MIT sprites; no Kenney download was needed; recorded in `THIRD_PARTY_NOTICES.md` (no separate `CREDITS.json`). Working agents type at ~7 fps with a glowing monitor; seated idle agents lean back with the screen off. Make a 16×16 tileset and furniture (desks, chairs, cabinets, document stacks, windows, task board, plants) from Kenney CC0 and/or pixel-agents' MIT open-source assets. Add a Boss sprite (suit/tie variant) and a "paper" hand-off prop. Record each asset's source in `THIRD_PARTY_NOTICES.md` and an `assets/CREDITS.json` manifest. *Acceptance:* The release build contains no asset without a recorded license.
 
-**P3.3 Theme packs as optional downloads (S).** Move the `offices/*.zip` themes out of the core bundle and fetch them on demand from a versioned URL, or install them as add-ons. Only themes with verified provenance ship.
+**P3.3 Theme packs as optional downloads (S).** **Status: DONE** as data-only palette themes in `public/themes/` (Night Shift, Mint Studio), validated and fetched only when used (`layout/themes.ts`); the quarantined backgrounds still never ship. Move the `offices/*.zip` themes out of the core bundle and fetch them on demand from a versioned URL, or install them as add-ons. Only themes with verified provenance ship.
 
-**P3.4 Ambient life without CPU cost (S).** Coffee machine, plants and window day/night tint are driven by event-time timers (see P4.1), not per-frame updates.
+**P3.4 Ambient life without CPU cost (S).** **Status: NOT STARTED** (out of Phase 3 scope this round); the loop now sleeps right after a clean frame, 0 renders over 3 s when idle. Coffee machine, plants and window day/night tint are driven by event-time timers (see P4.1), not per-frame updates.
+
+**Phase 1 leftovers fixed in Phase 3:**
+- Demo hires 1 Lead, 4 devs and a reviewer into an empty office; the Lead fans four TASK: lines out to four devs, then hands the result to the reviewer (`apps/gateway/src/demo-mode.ts`). **DONE.**
+- Empty right panel after a reload (also on upstream `5b0246c`, same code): selecting the Lead now switches to the Team tab. **DONE.**
+- Raw internal prompts in the chat log: shown as one human line with a "show raw" toggle (`ui/promptDisplay.ts`). **DONE.**
+- Working characters type again (shared ~7 fps beat, one redraw per frame however many type). **DONE.**
 
 ### Phase 4 — Performance and lightweight (about 1–2 weeks; measure first)
 
