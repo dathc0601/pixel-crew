@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AgentStatusEnum, RiskLevelEnum, TeamPhaseEnum, WorkItemSchema, HandoffKindEnum, LeadWaitingReasonEnum } from "./types";
+import { AgentStatusEnum, RiskLevelEnum, TeamPhaseEnum, WorkItemSchema, HandoffKindEnum, LeadWaitingReasonEnum, UserRoleEnum } from "./types";
 import { OfficeConfigSchema } from "./office-config";
 
 export const AgentStatusEvent = z.object({
@@ -313,6 +313,42 @@ export const SessionsRevokedEvent = z.object({
   revoked: z.number(),
 });
 
+/**
+ * Reply to CREATE_PAIR_LINK (sent only to the owner who asked). `qr` is the QR code of
+ * `url` as a size×size grid of "1" (dark) / "0" (light) modules, row by row, so the UI
+ * draws it without a QR library. `urls` are the base addresses the gateway can offer.
+ */
+export const PairLinkEvent = z.object({
+  type: z.literal("PAIR_LINK"),
+  url: z.string(),
+  role: UserRoleEnum,
+  expiresAt: z.number(),
+  qr: z.object({ size: z.number().int().positive(), modules: z.string() }),
+  urls: z.array(z.string()),
+  /** Why phones may not reach `url` (e.g. loopback only without --lan) */
+  warning: z.string().optional(),
+});
+
+export const DeviceInfoSchema = z.object({
+  deviceId: z.string(),
+  name: z.string(),
+  role: UserRoleEnum,
+  kind: z.enum(["local", "qr", "code", "share"]),
+  issuedAt: z.number(),
+  lastSeenAt: z.number(),
+  expiresAt: z.number(),
+  /** Has an open WebSocket right now */
+  connected: z.boolean(),
+  /** The device receiving this event */
+  current: z.boolean(),
+});
+
+/** Paired devices (owner only). Sent on LIST_DEVICES and after a device pairs or is revoked. */
+export const DevicesEvent = z.object({
+  type: z.literal("DEVICES"),
+  devices: z.array(DeviceInfoSchema),
+});
+
 // ---------------------------------------------------------------------------
 // Phase 1: Boss → Lead → Dev choreography. Cosmetic for the scene; the daemon owns the state.
 // ---------------------------------------------------------------------------
@@ -419,6 +455,8 @@ export const GatewayEventSchema = z.discriminatedUnion("type", [
   SkillListEvent,
   ChatHistoryLoadedEvent,
   SessionsRevokedEvent,
+  PairLinkEvent,
+  DevicesEvent,
   WorkItemUpdatedEvent,
   HandoffEvent,
   LeadWaitingEvent,
@@ -435,6 +473,9 @@ export type LogAppendEvent = z.infer<typeof LogAppendEvent>;
 export type ApprovalNeededEvent = z.infer<typeof ApprovalNeededEvent>;
 export type TaskResultPayload = z.infer<typeof TaskResultPayload>;
 export type TaskDoneEvent = z.infer<typeof TaskDoneEvent>;
+export type PairLinkEvent = z.infer<typeof PairLinkEvent>;
+export type DevicesEvent = z.infer<typeof DevicesEvent>;
+export type DeviceInfo = z.infer<typeof DeviceInfoSchema>;
 export type TaskFailedEvent = z.infer<typeof TaskFailedEvent>;
 export type TaskDelegatedEvent = z.infer<typeof TaskDelegatedEvent>;
 export type AgentCreatedEvent = z.infer<typeof AgentCreatedEvent>;

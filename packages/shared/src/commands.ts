@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { DecisionEnum } from "./types";
+import { DecisionEnum, UserRoleEnum } from "./types";
 
 export const RunTaskCommand = z.object({
   type: z.literal("RUN_TASK"),
@@ -243,6 +243,29 @@ export const RevokeSessionsCommand = z.object({
 });
 
 /**
+ * Owner-only: make a one-time pairing link (`…/pair#<token>`, 128-bit, valid 2 minutes,
+ * single use) for a new device with the given role. Reply: PAIR_LINK, to the caller only.
+ * `baseUrl` picks one of the addresses the gateway offered (PAIR_LINK.urls); anything
+ * else falls back to the first offered address.
+ */
+export const CreatePairLinkCommand = z.object({
+  type: z.literal("CREATE_PAIR_LINK"),
+  role: UserRoleEnum.default("owner"),
+  baseUrl: z.string().max(300).optional(),
+});
+
+/** Owner-only: list paired devices. Reply: DEVICES, to the caller only. */
+export const ListDevicesCommand = z.object({
+  type: z.literal("LIST_DEVICES"),
+});
+
+/** Owner-only: revoke one device's session and disconnect it. Owners then get DEVICES. */
+export const RevokeDeviceCommand = z.object({
+  type: z.literal("REVOKE_DEVICE"),
+  deviceId: z.string().min(1).max(64),
+});
+
+/**
  * The Boss (UI user) assigns a task to the Team Lead. The daemon emits a boss_to_lead
  * HANDOFF and starts the Lead after office.handoff.durationMs.
  * allowLeadSelfWork / allowSubagents can only narrow office.lead (see lead-policy.ts),
@@ -322,6 +345,9 @@ export const CommandSchema = z.discriminatedUnion("type", [
   SyncChatHistoryCommand,
   LoadChatHistoryCommand,
   RevokeSessionsCommand,
+  CreatePairLinkCommand,
+  ListDevicesCommand,
+  RevokeDeviceCommand,
   BossAssignCommand,
   GetOfficeConfigCommand,
   SetOfficeConfigCommand,
@@ -363,6 +389,9 @@ export type ListSkillsCommand = z.infer<typeof ListSkillsCommand>;
 export type SaveSkillCommand = z.infer<typeof SaveSkillCommand>;
 export type DeleteSkillCommand = z.infer<typeof DeleteSkillCommand>;
 export type RevokeSessionsCommand = z.infer<typeof RevokeSessionsCommand>;
+export type CreatePairLinkCommand = z.infer<typeof CreatePairLinkCommand>;
+export type ListDevicesCommand = z.infer<typeof ListDevicesCommand>;
+export type RevokeDeviceCommand = z.infer<typeof RevokeDeviceCommand>;
 export type BossAssignCommand = z.infer<typeof BossAssignCommand>;
 export type GetOfficeConfigCommand = z.infer<typeof GetOfficeConfigCommand>;
 export type SetOfficeConfigCommand = z.infer<typeof SetOfficeConfigCommand>;
