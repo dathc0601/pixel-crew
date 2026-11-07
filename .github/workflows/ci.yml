@@ -41,12 +41,15 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      # A real gateway process in demo mode: Boss → Lead → devs → reviewer over HTTP + WebSocket.
+      # Every agent is the scripted fake backend; no AI CLI runs and no tokens are spent.
+      - name: End-to-end (fake backend)
+        run: pnpm --filter pixel-crew test:e2e
+
       # Tests never start a real AI CLI: orchestrator flows use the fake backend.
-      # Windows is allowed to fail until the Phase 5 portability work (POSIX-only
-      # process-group kills, path guards); tracked in the fork plan.
+      # Must pass on every OS (the Windows allowance ended with Phase 5).
       - name: Test
         run: pnpm test
-        continue-on-error: ${{ matrix.os == 'windows-latest' }}
 
       - name: Build web
         run: pnpm --filter web build
