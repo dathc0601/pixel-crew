@@ -93,5 +93,13 @@ part of any build. See `apps/web/assets-quarantine/README.md`.
 
 ## Fonts
 
-Inter, JetBrains Mono and Press Start 2P are loaded from Google Fonts at
-runtime (not bundled). They are licensed under the SIL Open Font License 1.1.
+Self-hosted in `apps/web/public/fonts/` (no Google Fonts request at runtime).
+All three are licensed under the SIL Open Font License 1.1; the full license
+text ships next to the files (`OFL-*.txt`). Taken from the Fontsource npm
+packages, version 5.1.0.
+
+| Font | Copyright | Files | Changes |
+|---|---|---|---|
+| Inter | 2016 The Inter Project Authors (https://github.com/rsms/inter) | `inter-{400,500,600}.woff2` | Subset with fonttools `pyftsubset` to Latin-1 plus common punctuation |
+| JetBrains Mono | 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono) | `jetbrains-mono-{300,400,500}.woff2` | Subset the same way |
+| Press Start 2P | 2012 The Press Start 2P Project Authors (cody@zone38.net), Reserved Font Name "Press Start 2P" | `press-start-2p-400.woff2` | None: Fontsource's Latin subset as published, so the reserved name is kept unmodified |
