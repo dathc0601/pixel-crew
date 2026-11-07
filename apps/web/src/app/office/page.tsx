@@ -14,6 +14,7 @@ import { TILE_SIZE, ZOOM_MIN, ZOOM_MAX } from "@/components/office/constants";
 import { useEditorActions } from "@/hooks/useEditorActions";
 import { useEditorKeyboard } from "@/hooks/useEditorKeyboard";
 import { useSoundEffects } from "@/hooks/useSoundEffects";
+import { useLogSubscription } from "@/hooks/useLogSubscription";
 
 import type { SceneAdapter } from "@/components/office/scene/SceneAdapter";
 import { useSceneBridge } from "@/components/office/scene/useSceneBridge";
@@ -1032,6 +1033,8 @@ export default function OfficePage() {
 
   // Review overlay: reviewer floats on top of source agent's pane
   const [reviewOverlay, setReviewOverlay] = useState<{ reviewerAgentId: string; sourceAgentId: string } | null>(null);
+  // Full logs only for the panes on screen (P4.5)
+  useLogSubscription(consoleMode ? [...openPanes, selectedAgent, reviewOverlay?.reviewerAgentId] : [selectedAgent, reviewOverlay?.reviewerAgentId]);
   const reviewInProgress = useRef(false);
   // When review is done, store the result text for user confirmation (null = still working or no overlay)
   const [reviewResultText, setReviewResultText] = useState<string | null>(null);

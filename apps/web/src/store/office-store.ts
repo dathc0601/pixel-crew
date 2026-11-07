@@ -407,6 +407,13 @@ function defaultAgent(agentId: string, name = agentId, role = ""): AgentState {
   };
 }
 
+/** Last non-empty line of a (possibly multi-line) log chunk */
+function lastLogLine(chunk: string): string {
+  const lines = chunk.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) if (lines[i].trim()) return lines[i];
+  return chunk;
+}
+
 export const useOfficeStore = create<OfficeStore>((set, get) => ({
   agents: new Map(),
   agentDefs: [],
@@ -929,10 +936,11 @@ export const useOfficeStore = create<OfficeStore>((set, get) => ({
           if (!agent || !event.chunk) break;
           // Update log line in separate map — avoids cloning agent object for status-only updates
           const logLines = new Map(state.agentLogLines);
-          logLines.set(event.agentId, event.chunk);
+          // The daemon batches lines (P4.5): the status line is the last one
+          logLines.set(event.agentId, lastLogLine(event.chunk));
 
-          // Thinking snippets (💭 prefix) are status-only — update agentLogLines but skip chat
-          if (event.chunk.startsWith("\uD83D\uDCAD ")) {
+          // Thinking snippets (💭 prefix) and previews of closed panes are status-only — skip chat
+          if (event.preview || event.chunk.startsWith("\uD83D\uDCAD ")) {
             return { agents: state.agents, agentLogLines: logLines };
           }
 
@@ -941,7 +949,8 @@ export const useOfficeStore = create<OfficeStore>((set, get) => ({
           const lastMsg = agent.messages.length > 0 ? agent.messages[agent.messages.length - 1] : null;
           if (streamId && lastMsg?.id === streamId) {
             // Accumulate all output for full terminal-style display
-            const prev = lastMsg._accumulatedText ?? "";
+            // replace: the daemon sent the whole output so far (pane opened mid-task)
+            const prev = event.replace ? "" : (lastMsg._accumulatedText ?? "");
             const accumulated = prev ? prev + "\n" + event.chunk : event.chunk;
             const updatedMessages = [...agent.messages];
             updatedMessages[updatedMessages.length - 1] = {
@@ -951,6 +960,8 @@ export const useOfficeStore = create<OfficeStore>((set, get) => ({
               _accumulatedText: accumulated,
             };
             agents.set(event.agentId, { ...agent, messages: updatedMessages });
+          } else if (event.replace) {
+            // Catch-up for a task whose stream message is not here: nothing to replace
           } else if (agent.isExternal) {
             // External agents: accumulate text into the latest agent message (no task:done to replace)
             const now = Date.now();
