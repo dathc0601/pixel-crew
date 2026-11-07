@@ -4,12 +4,50 @@ import { useState, useEffect, useCallback } from 'react'
 import JSZip from 'jszip'
 import type { OfficeLayout } from '../types'
 import { loadRoomZipFromUrl } from '../layout/roomZipLoader'
+import { createDefaultLayout } from '../layout/layoutSerializer'
+import { BUILTIN_THEME_ID, loadThemeIndex, loadThemeLayout } from '../layout/themes'
 
 interface OfficeEntry {
   id: string
   name: string
   file: string
   thumbnail?: string
+  /** builtin = the bundled plan; palette = data-only theme from /themes; zip = local room ZIP from /offices */
+  kind?: 'builtin' | 'palette' | 'zip'
+  swatch?: string[]
+}
+
+const BUILTIN_ENTRY: OfficeEntry = {
+  id: BUILTIN_THEME_ID,
+  name: 'Pixel Crew HQ',
+  file: '',
+  kind: 'builtin',
+  swatch: ['#b4643c', '#4a6aa8', '#c9b48a', '#8fb8b8'],
+}
+
+/** Every switchable office: the bundled one, shipped palette themes, then local room ZIPs. */
+async function loadOfficeEntries(): Promise<OfficeEntry[]> {
+  const [themes, zips] = await Promise.all([
+    loadThemeIndex(),
+    fetch(`${OFFICES_BASE}/index.json`)
+      .then(async (r) => (r.ok ? ((await r.json()) as OfficeEntry[]) : []))
+      .catch(() => [] as OfficeEntry[]),
+  ])
+  return [
+    BUILTIN_ENTRY,
+    ...themes.map((t) => ({ ...t, id: `theme:${t.id}`, kind: 'palette' as const })),
+    ...(Array.isArray(zips) ? zips : []).map((z) => ({ ...z, kind: 'zip' as const })),
+  ]
+}
+
+/** Layout (+ background image for ZIP rooms) of one entry, or null when it cannot load. */
+async function loadEntry(entry: OfficeEntry): Promise<{ layout: OfficeLayout; backgroundImage: HTMLImageElement | null } | null> {
+  if (entry.kind === 'builtin') return { layout: createDefaultLayout(), backgroundImage: null }
+  if (entry.kind === 'palette') {
+    const layout = await loadThemeLayout({ id: entry.id.replace(/^theme:/, ''), name: entry.name, file: entry.file })
+    return layout ? { layout, backgroundImage: null } : null
+  }
+  return loadRoomZipFromUrl(`${OFFICES_BASE}/${entry.file}`)
 }
 
 interface OfficeEntryWithThumb extends OfficeEntry {
@@ -59,16 +97,13 @@ export default function OfficeSwitcher({ isOpen, onClose, onSelect, currentOffic
 
     ;(async () => {
       try {
-        const res = await fetch(`${OFFICES_BASE}/index.json`)
-        // No themes ship by default (see apps/web/assets-quarantine/README.md)
-        if (!res.ok) { if (!cancelled) setIndexMissing(true); return }
-        const data: OfficeEntry[] = await res.json()
+        const data = await loadOfficeEntries()
         if (cancelled) return
-        setIndexMissing(false)
+        setIndexMissing(data.length <= 1)
         setOffices(data.map((e) => ({ ...e })))
 
-        // Extract thumbnails from zips in parallel
-        const thumbPromises = data.map(async (entry) => {
+        // Extract thumbnails from local room zips in parallel
+        const thumbPromises = data.filter((e) => e.kind === 'zip').map(async (entry) => {
           if (entry.thumbnail) return { id: entry.id, url: `${OFFICES_BASE}/${entry.thumbnail}` }
           const url = await extractThumbnail(`${OFFICES_BASE}/${entry.file}`)
           return { id: entry.id, url }
@@ -94,7 +129,7 @@ export default function OfficeSwitcher({ isOpen, onClose, onSelect, currentOffic
     setLoading(true)
     setLoadingId(entry.id)
     try {
-      const result = await loadRoomZipFromUrl(`${OFFICES_BASE}/${entry.file}`)
+      const result = await loadEntry(entry)
       if (result) {
         try { localStorage.setItem('office-selected-id', entry.id) } catch {}
         onSelect(result.layout, result.backgroundImage)
@@ -191,14 +226,14 @@ export default function OfficeSwitcher({ isOpen, onClose, onSelect, currentOffic
         >
           {offices.length === 0 && (
             <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: 13, padding: 20, textAlign: 'center', gridColumn: '1 / -1' }}>
-              {indexMissing ? 'No office themes installed. Using the default pixel office.' : 'Loading...'}
+              {indexMissing ? 'Only the built-in office is installed.' : 'Loading...'}
             </div>
           )}
           {offices.map((entry) => {
             const isCurrent = currentOfficeId === entry.id
             const isLoading = loadingId === entry.id
             const isHovered = hovered === entry.id
-            const thumbSrc = entry.thumbUrl || (entry.thumbnail ? `${OFFICES_BASE}/${entry.thumbnail}` : undefined)
+            const thumbSrc = entry.thumbUrl || (entry.kind === 'zip' && entry.thumbnail ? `${OFFICES_BASE}/${entry.thumbnail}` : undefined)
             return (
               <button
                 key={entry.id}
@@ -246,6 +281,13 @@ export default function OfficeSwitcher({ isOpen, onClose, onSelect, currentOffic
                       }}
                     />
                   )}
+                  {!thumbSrc && entry.swatch && (
+                    <div aria-hidden style={{ position: 'absolute', inset: 8, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
+                      {entry.swatch.slice(0, 4).map((c, i) => (
+                        <div key={i} style={{ background: c, border: '2px solid rgba(0,0,0,0.35)' }} />
+                      ))}
+                    </div>
+                  )}
                   {isLoading && (
                     <div
                       style={{
@@ -287,19 +329,18 @@ export default function OfficeSwitcher({ isOpen, onClose, onSelect, currentOffic
   )
 }
 
-/** Load the default office on startup */
+/**
+ * The office chosen in the switcher, on startup. Null means the bundled default plan
+ * (also when nothing was chosen or the choice no longer exists).
+ */
 export async function loadDefaultOffice(): Promise<{ layout: import('../types').OfficeLayout; backgroundImage: HTMLImageElement | null; officeId: string } | null> {
   try {
-    const res = await fetch(`${OFFICES_BASE}/index.json`)
-    if (!res.ok) return null
-    const offices: OfficeEntry[] = await res.json()
-    // Use saved selection or fall back to first entry
     let selectedId: string | null = null
     try { selectedId = localStorage.getItem('office-selected-id') } catch {}
-    const entry = offices.find((o) => o.id === selectedId) || offices[0]
+    if (!selectedId || selectedId === BUILTIN_THEME_ID) return null
+    const entry = (await loadOfficeEntries()).find((o) => o.id === selectedId)
     if (!entry) return null
-
-    const result = await loadRoomZipFromUrl(`${OFFICES_BASE}/${entry.file}`)
+    const result = await loadEntry(entry)
     if (!result) return null
     return { layout: result.layout, backgroundImage: result.backgroundImage, officeId: entry.id }
   } catch (err) {

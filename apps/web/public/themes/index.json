@@ -1,0 +1,4 @@
+[
+  { "id": "night-shift", "name": "Night Shift", "file": "night-shift.json", "swatch": ["#3a3350", "#24304f", "#4b4a5c", "#2f4a4a"] },
+  { "id": "mint-studio", "name": "Mint Studio", "file": "mint-studio.json", "swatch": ["#c9a27a", "#7fbfa6", "#e6dcc8", "#f0c9a0"] }
+]

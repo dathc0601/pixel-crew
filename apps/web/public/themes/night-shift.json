@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "kind": "palette",
+  "walls": { "h": 250, "s": 22, "b": -58, "c": 0 },
+  "doors": { "h": 30, "s": 30, "b": -30, "c": 0, "colorize": true },
+  "floors": {
+    "boss_room": { "h": 280, "s": 30, "b": -40, "c": 10, "colorize": true },
+    "lead_area": { "h": 225, "s": 35, "b": -38, "c": 0, "colorize": true },
+    "dev_area": { "h": 240, "s": 10, "b": -30, "c": 0, "colorize": true },
+    "meeting": { "h": 170, "s": 25, "b": -36, "c": 0, "colorize": true },
+    "pantry": { "h": 190, "s": 22, "b": -34, "c": 0, "colorize": true }
+  }
+}
