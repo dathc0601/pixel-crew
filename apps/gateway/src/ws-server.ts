@@ -20,6 +20,7 @@ import {
   clientKey,
   normalizeOrigin,
   safeEqual,
+  isTunnelRequest,
 } from "./security.js";
 
 let wss: WebSocketServer | null = null;
@@ -316,104 +317,23 @@ export const wsChannel: Channel = {
           return;
         }
 
-        // --- Preview routes (built-in static serving + command proxy) ---
-        const url = req.url ?? "/";
-
-        // Static preview: serve files directly from disk (no child process)
-        const staticMatch = url.match(/^\/preview-static(\/.*)?$/);
-        if (staticMatch) {
-          const root = previewServer.staticRoot;
-          const entry = previewServer.staticEntry;
-          if (!root) {
-            res.writeHead(404, { "Content-Type": "text/plain" });
-            res.end("No static preview configured");
+        // --- Previews live on a separate origin (P0.3) ---
+        // Agent-generated pages must not share an origin with the control UI, whose
+        // session token is in localStorage. Redirect to the preview port; through the
+        // Cloudflare tunnel (single port) serve them here under a CSP sandbox instead.
+        if (isPreviewPath(req.url)) {
+          if (isTunnelRequest(req)) {
+            await handlePreviewRequest(req, res);
             return;
           }
-          const reqPath = decodeURIComponent((staticMatch[1] || "/").split("?")[0]);
-          const filePath = resolve(root, reqPath === "/" ? (entry ?? "index.html") : reqPath.slice(1));
-          // Security: prevent path traversal outside root (trailing sep avoids sibling-prefix bypass)
-          const rootWithSep = resolve(root) + "/";
-          if (filePath !== resolve(root) && !filePath.startsWith(rootWithSep)) {
-            res.writeHead(403, { "Content-Type": "text/plain" });
-            res.end("Forbidden");
+          const target = previewRedirectUrl(req);
+          if (!target) {
+            res.writeHead(503, { "Content-Type": "text/plain" });
+            res.end("Preview server not running");
             return;
           }
-          try {
-            const fileStat = await stat(filePath);
-            if (!fileStat.isFile()) {
-              res.writeHead(404, { "Content-Type": "text/plain" });
-              res.end("Not found");
-              return;
-            }
-            const ext = extname(filePath).toLowerCase();
-            const mime: Record<string, string> = {
-              ".html": "text/html", ".htm": "text/html",
-              ".css": "text/css", ".js": "application/javascript", ".mjs": "application/javascript",
-              ".json": "application/json", ".xml": "application/xml",
-              ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-              ".gif": "image/gif", ".svg": "image/svg+xml", ".webp": "image/webp", ".avif": "image/avif", ".ico": "image/x-icon",
-              ".woff": "font/woff", ".woff2": "font/woff2", ".ttf": "font/ttf", ".otf": "font/otf", ".eot": "application/vnd.ms-fontobject",
-              ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg",
-              ".mp4": "video/mp4", ".webm": "video/webm",
-              ".wasm": "application/wasm", ".pdf": "application/pdf", ".zip": "application/zip",
-              ".txt": "text/plain", ".md": "text/markdown", ".csv": "text/csv",
-              ".ts": "application/javascript", ".tsx": "application/javascript", ".jsx": "application/javascript",
-            };
-            const contentType = mime[ext] || "application/octet-stream";
-            const data = await readFile(filePath);
-            res.writeHead(200, {
-              "Content-Type": contentType,
-              "Content-Length": data.length,
-              "Cache-Control": "no-cache",
-              "Access-Control-Allow-Origin": "*",
-            });
-            res.end(data);
-          } catch {
-            res.writeHead(404, { "Content-Type": "text/plain" });
-            res.end("Not found");
-          }
-          return;
-        }
-
-        // Command preview: reverse proxy to COMMAND_PORT with auto-restart on failure
-        const appMatch = url.match(/^\/preview-app(\/.*)?$/);
-        if (appMatch) {
-          const targetPath = appMatch[1] || "/";
-          const targetPort = previewServer.commandPort;
-          const chunks: Buffer[] = [];
-          req.on("data", (c: Buffer) => chunks.push(c));
-          req.on("end", () => {
-            const body = Buffer.concat(chunks);
-            const send502 = () => {
-              res.writeHead(502, { "Content-Type": "text/plain" });
-              res.end("Preview app not running");
-            };
-            const doProxy = (isRetry: boolean) => {
-              const proxyReq = httpRequest(
-                { hostname: "127.0.0.1", port: targetPort, path: targetPath, method: req.method, headers: { ...req.headers, host: `127.0.0.1:${targetPort}` } },
-                (proxyRes) => {
-                  const status = proxyRes.statusCode ?? 502;
-                  if (status === 502 && !isRetry) {
-                    proxyRes.resume();
-                    previewServer.ensureCommandRunning().then((ok) => ok ? doProxy(true) : send502());
-                    return;
-                  }
-                  res.writeHead(status, proxyRes.headers);
-                  proxyRes.pipe(res, { end: true });
-                },
-              );
-              proxyReq.on("error", () => {
-                if (!isRetry) {
-                  previewServer.ensureCommandRunning().then((ok) => ok ? doProxy(true) : send502());
-                } else {
-                  send502();
-                }
-              });
-              if (body.length > 0) proxyReq.write(body);
-              proxyReq.end();
-            };
-            doProxy(false);
-          });
+          res.writeHead(302, { Location: target, "Cache-Control": "no-store" });
+          res.end();
           return;
         }
 
@@ -536,7 +456,7 @@ export const wsChannel: Channel = {
           // Signal for Tauri sidecar — Rust parses this to emit port to webview
           console.log(`GATEWAY_READY ${JSON.stringify({ port, gatewayId: config.gatewayId })}`);
 
-          promiseResolve(true);
+          startPreviewServer().then(() => promiseResolve(true));
         });
 
         server.once("error", (err: NodeJS.ErrnoException) => {
@@ -577,8 +497,201 @@ export const wsChannel: Channel = {
     httpServer?.close();
     httpServer?.closeAllConnections?.();
     httpServer = null;
+    previewHttpServer?.close();
+    previewHttpServer?.closeAllConnections?.();
+    previewHttpServer = null;
   },
 };
+
+// ---------------------------------------------------------------------------
+// Preview origin (P0.3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Every preview response runs in an opaque origin: even when opened directly
+ * (new tab, tunnel), the page cannot read cookies or storage of any real origin.
+ * ACAO "*" is safe here (the preview origin holds no secrets) and is needed for
+ * module scripts and fetches made from the opaque origin.
+ */
+export const PREVIEW_CSP = "sandbox allow-scripts allow-forms allow-modals allow-popups allow-pointer-lock allow-downloads";
+
+function previewHeaders(extra: Record<string, string | number | string[] | undefined> = {}): Record<string, string | number | string[]> {
+  const out: Record<string, string | number | string[]> = {};
+  for (const [k, v] of Object.entries(extra)) {
+    if (v === undefined) continue;
+    const lk = k.toLowerCase();
+    // Drop upstream CORS/frame headers; ours below are authoritative
+    if (lk === "access-control-allow-origin" || lk === "x-frame-options") continue;
+    if (lk === "content-security-policy") {
+      out["Content-Security-Policy"] = [...(Array.isArray(v) ? v : [String(v)]), PREVIEW_CSP];
+      continue;
+    }
+    out[k] = v as string | number | string[];
+  }
+  if (!out["Content-Security-Policy"]) out["Content-Security-Policy"] = PREVIEW_CSP;
+  out["Access-Control-Allow-Origin"] = "*";
+  out["X-Content-Type-Options"] = "nosniff";
+  return out;
+}
+
+/** Forward a preview request to the app server without the sandbox's "null" Origin or cookies. */
+function proxyRequestHeaders(req: IncomingMessage, targetPort: number): Record<string, string | string[] | undefined> {
+  const headers: Record<string, string | string[] | undefined> = { ...req.headers, host: `127.0.0.1:${targetPort}` };
+  delete headers.origin;
+  delete headers.cookie;
+  return headers;
+}
+
+function isPreviewPath(url: string | undefined): boolean {
+  return !!url && /^\/preview-(static|app)(\/|$|\?)/.test(url);
+}
+
+let previewHttpServer: Server | null = null;
+
+/** http://<same host as the request>:<preview port><path>, or null when the preview server is down. */
+function previewRedirectUrl(req: IncomingMessage): string | null {
+  const addr = previewHttpServer?.address();
+  if (!addr || typeof addr === "string") return null;
+  const hostHeader = req.headers.host ?? `localhost:${config.wsPort}`;
+  const hostname = hostHeader.startsWith("[") ? hostHeader.slice(0, hostHeader.indexOf("]") + 1) : hostHeader.split(":")[0];
+  return `http://${hostname}:${addr.port}${req.url ?? "/"}`;
+}
+
+/** Address of the preview server (tests, logging). */
+export function getPreviewAddress(): { host: string; port: number } | null {
+  const addr = previewHttpServer?.address();
+  if (!addr || typeof addr === "string") return null;
+  return { host: addr.address, port: addr.port };
+}
+
+/** Serve /preview-static/* from disk and proxy /preview-app/* to the command preview port. */
+async function handlePreviewRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const url = req.url ?? "/";
+  // Static preview: serve files directly from disk (no child process)
+  const staticMatch = url.match(/^\/preview-static(\/.*)?$/);
+  if (staticMatch) {
+    const root = previewServer.staticRoot;
+    const entry = previewServer.staticEntry;
+    if (!root) {
+      res.writeHead(404, previewHeaders({ "Content-Type": "text/plain" }));
+      res.end("No static preview configured");
+      return;
+    }
+    const reqPath = decodeURIComponent((staticMatch[1] || "/").split("?")[0]);
+    const filePath = resolve(root, reqPath === "/" ? (entry ?? "index.html") : reqPath.slice(1));
+    // Security: prevent path traversal outside root (trailing sep avoids sibling-prefix bypass)
+    const rootWithSep = resolve(root) + "/";
+    if (filePath !== resolve(root) && !filePath.startsWith(rootWithSep)) {
+      res.writeHead(403, previewHeaders({ "Content-Type": "text/plain" }));
+      res.end("Forbidden");
+      return;
+    }
+    try {
+      const fileStat = await stat(filePath);
+      if (!fileStat.isFile()) {
+        res.writeHead(404, previewHeaders({ "Content-Type": "text/plain" }));
+        res.end("Not found");
+        return;
+      }
+      const ext = extname(filePath).toLowerCase();
+      const mime: Record<string, string> = {
+        ".html": "text/html", ".htm": "text/html",
+        ".css": "text/css", ".js": "application/javascript", ".mjs": "application/javascript",
+        ".json": "application/json", ".xml": "application/xml",
+        ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".gif": "image/gif", ".svg": "image/svg+xml", ".webp": "image/webp", ".avif": "image/avif", ".ico": "image/x-icon",
+        ".woff": "font/woff", ".woff2": "font/woff2", ".ttf": "font/ttf", ".otf": "font/otf", ".eot": "application/vnd.ms-fontobject",
+        ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg",
+        ".mp4": "video/mp4", ".webm": "video/webm",
+        ".wasm": "application/wasm", ".pdf": "application/pdf", ".zip": "application/zip",
+        ".txt": "text/plain", ".md": "text/markdown", ".csv": "text/csv",
+        ".ts": "application/javascript", ".tsx": "application/javascript", ".jsx": "application/javascript",
+      };
+      const contentType = mime[ext] || "application/octet-stream";
+      const data = await readFile(filePath);
+      res.writeHead(200, previewHeaders({
+        "Content-Type": contentType,
+        "Content-Length": data.length,
+        "Cache-Control": "no-cache",
+      }));
+      res.end(data);
+    } catch {
+      res.writeHead(404, previewHeaders({ "Content-Type": "text/plain" }));
+      res.end("Not found");
+    }
+    return;
+  }
+
+  // Command preview: reverse proxy to COMMAND_PORT with auto-restart on failure
+  const appMatch = url.match(/^\/preview-app(\/.*)?$/);
+  if (appMatch) {
+    const targetPath = appMatch[1] || "/";
+    const targetPort = previewServer.commandPort;
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
+    req.on("end", () => {
+      const body = Buffer.concat(chunks);
+      const send502 = () => {
+        res.writeHead(502, previewHeaders({ "Content-Type": "text/plain" }));
+        res.end("Preview app not running");
+      };
+      const doProxy = (isRetry: boolean) => {
+        const proxyReq = httpRequest(
+          { hostname: "127.0.0.1", port: targetPort, path: targetPath, method: req.method, headers: proxyRequestHeaders(req, targetPort) },
+          (proxyRes) => {
+            const status = proxyRes.statusCode ?? 502;
+            if (status === 502 && !isRetry) {
+              proxyRes.resume();
+              previewServer.ensureCommandRunning().then((ok) => ok ? doProxy(true) : send502());
+              return;
+            }
+            res.writeHead(status, previewHeaders(proxyRes.headers));
+            proxyRes.pipe(res, { end: true });
+          },
+        );
+        proxyReq.on("error", () => {
+          if (!isRetry) {
+            previewServer.ensureCommandRunning().then((ok) => ok ? doProxy(true) : send502());
+          } else {
+            send502();
+          }
+        });
+        if (body.length > 0) proxyReq.write(body);
+        proxyReq.end();
+      };
+      doProxy(false);
+    });
+    return;
+  }
+  res.writeHead(404, previewHeaders({ "Content-Type": "text/plain" }));
+  res.end("Not found");
+}
+
+function startPreviewServer(): Promise<void> {
+  return new Promise((resolveStart) => {
+    const server = createServer((req, res) => {
+      if (req.method === "OPTIONS") {
+        res.writeHead(204, previewHeaders({ "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS", "Access-Control-Allow-Headers": "*" }));
+        res.end();
+        return;
+      }
+      handlePreviewRequest(req, res).catch(() => {
+        if (!res.headersSent) res.writeHead(500, previewHeaders({ "Content-Type": "text/plain" }));
+        res.end("Preview error");
+      });
+    });
+    server.once("error", (err) => {
+      console.warn(`[Preview] Preview server failed to start: ${err.message}. Previews are unavailable.`);
+      resolveStart();
+    });
+    server.listen(config.previewPort, config.listenHost, () => {
+      previewHttpServer = server;
+      const a = server.address();
+      if (a && typeof a !== "string") console.log(`[Preview] Serving previews on ${config.listenHost}:${a.port} (separate origin)`);
+      resolveStart();
+    });
+  });
+}
 
 async function serveStatic(req: IncomingMessage, res: ServerResponse) {
   const url = decodeURIComponent(req.url?.split("?")[0] ?? "/");

@@ -55,6 +55,13 @@ export function linkifyText(children: React.ReactNode): React.ReactNode {
 }
 
 /**
+ * Sandbox for preview iframes. Deliberately no allow-same-origin: agent-generated
+ * pages get an opaque origin and cannot read the control UI's storage (session token).
+ * The gateway also serves previews from a separate port with a CSP sandbox header.
+ */
+export const PREVIEW_IFRAME_SANDBOX = "allow-scripts allow-forms allow-modals allow-popups allow-pointer-lock allow-downloads";
+
+/**
  * Get the gateway base URL for preview routes.
  * All preview URLs go through the gateway's HTTP server:
  *   /preview-static/* — built-in static file serving (no child process)

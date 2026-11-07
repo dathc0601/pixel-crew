@@ -6,6 +6,7 @@ import { RATING_DIMENSIONS } from "./office-constants";
 import type { Ratings } from "./office-constants";
 import TermModal from "./primitives/TermModal";
 import TermButton from "./primitives/TermButton";
+import { PREVIEW_IFRAME_SANDBOX } from "./office-utils";
 
 function StarRow({ label, icon, value, onChange }: {
   label: string; icon: string; value: number; onChange: (v: number) => void;
@@ -229,6 +230,7 @@ function PreviewOverlay({ url, onClose, savedRatings, submitted, onRate }: {
         {status === "ready" && (isTauri.current ? tauriMounted : true) && (
           <iframe
             src={url}
+            sandbox={PREVIEW_IFRAME_SANDBOX}
             onLoad={isTauri.current ? handleTauriLoad : undefined}
             style={{
               width: "100%", height: "100%", border: "none",

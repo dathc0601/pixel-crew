@@ -46,6 +46,8 @@ interface SavedConfig {
   allowedOrigins?: string[];
   /** Session token lifetime in ms (default 7 days) */
   sessionTtlMs?: number;
+  /** Port for the separate preview origin (default: OS-assigned) */
+  previewPort?: number;
 }
 
 function ensureConfigDir() {
@@ -187,6 +189,8 @@ function buildConfig() {
     allowedOrigins: Array.isArray(saved.allowedOrigins) ? saved.allowedOrigins.filter((o): o is string => typeof o === "string") : [],
     sessionTtlMs: typeof saved.sessionTtlMs === "number" && saved.sessionTtlMs > 0 ? saved.sessionTtlMs : 7 * 24 * 60 * 60 * 1000,
     isDev,
+    /** Previews are served from their own port so they get their own origin (0 = OS-assigned) */
+    previewPort: Number(process.env.PREVIEW_PORT) || (typeof saved.previewPort === "number" ? saved.previewPort : 0),
     ablyApiKey: process.env.ABLY_API_KEY || saved.ablyApiKey || undefined,
     webDir: resolveWebDir(),
     telegramBotToken:
