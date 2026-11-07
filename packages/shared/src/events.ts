@@ -103,6 +103,13 @@ export const AgentCreatedEvent = z.object({
   lastMergeCommit: z.string().nullable().optional(),
   lastMergeMessage: z.string().nullable().optional(),
   undoCount: z.number().optional(),
+  /** A Claude Code session the owner started elsewhere that joined the team (ATTACH_EXTERNAL) */
+  attached: z.boolean().optional(),
+  attachMode: z.enum(["fork", "live", "tmux"]).optional(),
+  /** One line for the UI: how this member's work runs */
+  attachNote: z.string().optional(),
+  /** External agents only: the ways it can join the team (absent = it cannot join) */
+  attachOptions: z.array(z.object({ mode: z.enum(["fork", "live", "tmux"]), note: z.string() })).optional(),
 });
 
 export const AgentFiredEvent = z.object({
@@ -421,6 +428,15 @@ export const GatewayInfoEvent = z.object({
   demo: z.boolean(),
 });
 
+/** Reply to the caller of ATTACH_EXTERNAL / DETACH_AGENT (success is also visible as AGENT_CREATED). */
+export const AttachResultEvent = z.object({
+  type: z.literal("ATTACH_RESULT"),
+  agentId: z.string(),
+  action: z.enum(["attach", "detach"]),
+  ok: z.boolean(),
+  error: z.string().optional(),
+});
+
 export const GatewayEventSchema = z.discriminatedUnion("type", [
   AgentsSyncEvent,
   AgentStatusEvent,
@@ -464,6 +480,7 @@ export const GatewayEventSchema = z.discriminatedUnion("type", [
   LeadSubagentStartedEvent,
   OfficeConfigEvent,
   GatewayInfoEvent,
+  AttachResultEvent,
 ]);
 
 export type TokenUsage = z.infer<typeof TokenUsage>;
@@ -510,6 +527,7 @@ export type LeadSelfWorkEvent = z.infer<typeof LeadSelfWorkEvent>;
 export type LeadSubagentStartedEvent = z.infer<typeof LeadSubagentStartedEvent>;
 export type OfficeConfigEvent = z.infer<typeof OfficeConfigEvent>;
 export type GatewayInfoEvent = z.infer<typeof GatewayInfoEvent>;
+export type AttachResultEvent = z.infer<typeof AttachResultEvent>;
 export type GatewayEvent = z.infer<typeof GatewayEventSchema>;
 
 /**

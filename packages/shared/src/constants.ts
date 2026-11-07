@@ -62,6 +62,7 @@ export const GATEWAY_EVENT_TYPES = [
   "LEAD_SUBAGENT_STARTED",
   "OFFICE_CONFIG",
   "GATEWAY_INFO",
+  "ATTACH_RESULT",
 ] as const;
 
 export type GatewayEventType = (typeof GATEWAY_EVENT_TYPES)[number];

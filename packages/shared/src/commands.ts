@@ -308,6 +308,26 @@ export const CancelWorkItemCommand = z.object({
   workItemId: z.string().min(1),
 });
 
+/** How an attached Claude Code session receives its tasks (see docs/attach-sessions.md). */
+export const AttachModeSchema = z.enum(["fork", "live", "tmux"]);
+
+/**
+ * Owner-only: make an external (view-only) Claude Code session a member of the team.
+ * mode defaults to "fork" (work runs in a fork of the session; the terminal is untouched).
+ */
+export const AttachExternalCommand = z.object({
+  type: z.literal("ATTACH_EXTERNAL"),
+  agentId: z.string().min(1),
+  role: z.literal("dev").optional(),
+  mode: AttachModeSchema.optional(),
+});
+
+/** Owner-only: take an attached session off the team (it becomes external again). */
+export const DetachAgentCommand = z.object({
+  type: z.literal("DETACH_AGENT"),
+  agentId: z.string().min(1),
+});
+
 export const CommandSchema = z.discriminatedUnion("type", [
   RunTaskCommand,
   SubscribeLogsCommand,
@@ -353,6 +373,8 @@ export const CommandSchema = z.discriminatedUnion("type", [
   SetOfficeConfigCommand,
   ResumePoolCommand,
   CancelWorkItemCommand,
+  AttachExternalCommand,
+  DetachAgentCommand,
 ]);
 
 export type RunTaskCommand = z.infer<typeof RunTaskCommand>;
@@ -397,4 +419,7 @@ export type GetOfficeConfigCommand = z.infer<typeof GetOfficeConfigCommand>;
 export type SetOfficeConfigCommand = z.infer<typeof SetOfficeConfigCommand>;
 export type ResumePoolCommand = z.infer<typeof ResumePoolCommand>;
 export type CancelWorkItemCommand = z.infer<typeof CancelWorkItemCommand>;
+export type AttachMode = z.infer<typeof AttachModeSchema>;
+export type AttachExternalCommand = z.infer<typeof AttachExternalCommand>;
+export type DetachAgentCommand = z.infer<typeof DetachAgentCommand>;
 export type Command = z.infer<typeof CommandSchema>;
