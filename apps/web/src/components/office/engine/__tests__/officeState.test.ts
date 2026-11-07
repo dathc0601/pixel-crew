@@ -59,4 +59,20 @@ describe('OfficeState in the default office', () => {
     assert.ok(o.nextWakeSec === null || o.nextWakeSec > 30, `next wake ${o.nextWakeSec}`)
     assert.ok(wakes > 0)
   })
+
+  it('after a pause, agents that started working meanwhile sit at their desks at once', () => {
+    const o = new OfficeState()
+    const dev = hire(o, 'd1', 'dev')
+    run(o, 2) // spawn effect done
+    const seat = o.seats.get(dev.seatId!)!
+    // Away from the desk (wandering), then the daemon says it works while the tab was hidden
+    dev.state = CharacterState.IDLE
+    dev.tileCol = seat.seatCol + 3
+    dev.x += 3 * 16
+    o.updateCharacterStatus('d1', 'working', true)
+    o.resumeAfterPause()
+    assert.equal(dev.tileCol, seat.seatCol)
+    assert.equal(dev.tileRow, seat.seatRow)
+    assert.equal(dev.state, CharacterState.TYPE)
+  })
 })

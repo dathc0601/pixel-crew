@@ -802,6 +802,27 @@ export class OfficeState {
     this.markDirty()
   }
 
+  /**
+   * The scene was paused (hidden tab, off-screen canvas) and runs again. Timers did not
+   * advance meanwhile, but the daemon went on: skip any walk, and put agents that started
+   * working while nobody looked straight at their desks instead of walking there late.
+   */
+  resumeAfterPause(): void {
+    this.choreo.finishAll()
+    for (const ch of this.characters.values()) {
+      if (!ch.isActive || ch.matrixEffect || !ch.seatId) continue
+      const seat = this.seats.get(ch.seatId)
+      if (!seat || (ch.tileCol === seat.seatCol && ch.tileRow === seat.seatRow && ch.state === CharacterState.TYPE)) continue
+      if (ch.restSeatId) {
+        const rs = this.seats.get(ch.restSeatId)
+        if (rs) rs.assigned = false
+        ch.restSeatId = null
+      }
+      this.seatAt(ch, seat, true)
+    }
+    this.markDirty()
+  }
+
   /** Show or hide the queue board next to a character (count 0 hides it). */
   setTaskBoard(agentId: string | null, count: number): void {
     const charId = agentId ? this.agentIdToCharId.get(agentId) : undefined

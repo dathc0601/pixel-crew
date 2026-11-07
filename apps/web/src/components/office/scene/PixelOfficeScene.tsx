@@ -189,10 +189,14 @@ export default function PixelOfficeScene({
 
     // Start game loop
     const dpr = window.devicePixelRatio || 1;
-    const { stop, wake } = startGameLoop(canvas, {
+    const loop = startGameLoop(canvas, {
       update: (dt) => {
         officeState.update(dt);
       },
+      // Hidden tab or off-screen canvas: finish walks now instead of resuming them late
+      onPause: () => officeState.finishHandoffs(),
+      // Back on screen: working agents sit at their desks, no catch-up walks (§7.7)
+      onResume: () => officeState.resumeAfterPause(),
       isDirty: (() => {
         let prevZoom = 0;
         let prevPanX = 0;
@@ -322,11 +326,12 @@ export default function PixelOfficeScene({
     });
 
     // Store wake for mouse/pointer handlers and officeState notifications
+    const { stop, wake } = loop;
     wakeRef.current = wake;
     officeState.onDirty = wake;
 
     // Create adapter and notify parent
-    const adapter = new PixelSceneAdapter(officeState, stop, wake);
+    const adapter = new PixelSceneAdapter(officeState, stop, wake, loop.isPaused);
     onAdapterReady(adapter);
 
     return () => {

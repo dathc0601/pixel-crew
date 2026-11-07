@@ -21,16 +21,19 @@ export class PixelSceneAdapter implements SceneAdapter {
   private officeState: OfficeState;
   private stopLoop: (() => void) | null;
   private wakeLoop: (() => void) | null;
-  private onVisibility = () => {
-    // A hidden tab gets no animation frames: finish walks now instead of resuming late
-    if (document.visibilityState === "hidden") this.officeState.finishHandoffs();
-  };
+  /** True while the game loop is paused (hidden tab, off-screen canvas): hand-offs play instantly */
+  private loopPaused: () => boolean;
 
-  constructor(officeState: OfficeState, stopLoop: (() => void) | null, wakeLoop?: (() => void) | null) {
+  constructor(
+    officeState: OfficeState,
+    stopLoop: (() => void) | null,
+    wakeLoop?: (() => void) | null,
+    loopPaused?: () => boolean,
+  ) {
     this.officeState = officeState;
     this.stopLoop = stopLoop;
     this.wakeLoop = wakeLoop ?? null;
-    if (typeof document !== "undefined") document.addEventListener("visibilitychange", this.onVisibility);
+    this.loopPaused = loopPaused ?? (() => false);
   }
 
   /** Wake the render loop from sleep (call after state mutations) */
@@ -72,7 +75,7 @@ export class PixelSceneAdapter implements SceneAdapter {
 
   playHandoff(fromId: string, toId: string, opts: HandoffOptions): Promise<void> {
     const receivedAt = opts.receivedAt ?? performance.now();
-    const hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+    const hidden = this.loopPaused() || (typeof document !== "undefined" && document.visibilityState === "hidden");
     return new Promise<void>((resolve) => {
       this.officeState.playHandoff({
         fromAgentId: fromId,
@@ -116,7 +119,6 @@ export class PixelSceneAdapter implements SceneAdapter {
   }
 
   dispose(): void {
-    if (typeof document !== "undefined") document.removeEventListener("visibilitychange", this.onVisibility);
     this.officeState.onObjectClick = null;
     this.stopLoop?.();
     this.stopLoop = null;
