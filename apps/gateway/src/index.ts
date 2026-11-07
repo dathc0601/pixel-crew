@@ -1,5 +1,7 @@
 // Must stay the first import: exits before any files are created when run as root without --allow-root
 import "./root-guard.js";
+// Second: demo mode picks its own data dir before config.ts resolves paths
+import { DEMO_MODE, DEMO_BACKEND_ID, resolveDemoAgentScript, writeDemoScenario } from "./demo-mode.js";
 import { registerChannel, initTransports, publishEvent, destroyTransports, reinitChannel, isChannelActive } from "./transport.js";
 import { wsChannel, setPairCode, sendToClient, revokeAllSessions } from "./ws-server.js";
 import { generatePairCode } from "./security.js";
@@ -9,7 +11,7 @@ import { config, CONFIG_DIR, hasSetupRun, reloadConfig, saveConfig, officeConfig
 import { backendPermissionMode } from "@pixel-crew/shared";
 import { runSetup } from "./setup.js";
 import { detectBackends, getBackend, getAllBackends } from "./backends.js";
-import { createOrchestrator, getMergeHistory, previewServer, recordProjectRatings, parseAgentOutput, setSessionDir, setStorageRoot, syncAgentDefs, type Orchestrator, type OrchestratorEvent, type RuntimeOwnerInfo, type TeamPhaseChangedEvent } from "@pixel-crew/orchestrator";
+import { createFakeBackend, FAKE_AGENT_SCRIPT, createOrchestrator, getMergeHistory, previewServer, recordProjectRatings, parseAgentOutput, setSessionDir, setStorageRoot, syncAgentDefs, type Orchestrator, type OrchestratorEvent, type RuntimeOwnerInfo, type TeamPhaseChangedEvent } from "@pixel-crew/orchestrator";
 import type { Command, GatewayEvent, UserRole, WorkItem as WireWorkItem } from "@pixel-crew/shared";
 import type { WorkItem } from "@pixel-crew/orchestrator";
 import { broadcastOfficeConfigChanges, handleOfficeConfigCommand, isOfficeConfigCommand } from "./office-config-commands.js";
@@ -919,6 +921,7 @@ function handleCommand(parsed: Command, meta: CommandMeta) {
       publishEvent({ type: "AGENT_DEFS", agents: agentDefs });
       publishEvent({ type: "BACKENDS_AVAILABLE", backends: config.detectedBackends });
       publishEvent({ type: "SKILL_LIST", skills: listSkills() });
+      publishEvent({ type: "GATEWAY_INFO", demo: DEMO_MODE });
       break;
     }
     case "SAVE_AGENT_DEF": {
@@ -1307,14 +1310,18 @@ async function main() {
   // Install file logger early — tee all console output to gateway.log
   installFileLogger(config.instanceDir);
 
-  // First run or --setup flag: interactive setup wizard
-  if (!hasSetupRun() || process.argv.includes("--setup")) {
+  // First run or --setup flag: interactive setup wizard (never in demo mode: nothing to set up)
+  if (!DEMO_MODE && (!hasSetupRun() || process.argv.includes("--setup"))) {
     await runSetup();
     reloadConfig();
   }
 
-  // Always re-detect AI backends on startup (CLIs may be installed/removed between runs)
-  {
+  // Always re-detect AI backends on startup (CLIs may be installed/removed between runs).
+  // Demo mode registers only the scripted fake backend, so no real CLI can ever be spawned.
+  if (DEMO_MODE) {
+    config.detectedBackends = [DEMO_BACKEND_ID];
+    config.defaultBackend = DEMO_BACKEND_ID;
+  } else {
     const detected = detectBackends();
     if (detected.length > 0) {
       config.detectedBackends = detected;
@@ -1327,10 +1334,19 @@ async function main() {
 
   // Register all known backends so any can be selected from the UI.
   // Detection only determines the default; uninstalled ones will fail at spawn time with a clear error.
-  const backendsToUse = getAllBackends();
+  const backendsToUse = DEMO_MODE
+    ? [{
+      ...createFakeBackend({
+        id: DEMO_BACKEND_ID,
+        scenarioFile: writeDemoScenario(CONFIG_DIR),
+        scriptPath: resolveDemoAgentScript(FAKE_AGENT_SCRIPT),
+      }),
+      name: "Demo (scripted)",
+    }]
+    : getAllBackends();
 
   // Sync bundled agent definitions to ~/.claude/agents/ for --agent resolution
-  syncAgentDefs();
+  if (!DEMO_MODE) syncAgentDefs();
 
   // Scope session storage to this gateway instance (prevents Tauri/Web/CLI context contamination)
   setSessionDir(config.instanceDir);
@@ -1341,7 +1357,8 @@ async function main() {
     workspace: config.defaultWorkspace,
     backends: backendsToUse,
     defaultBackend: config.defaultBackend,
-    worktree: config.worktreeEnabled ? { mergeOnComplete: true, alwaysIsolate: true } : false,
+    // Demo agents write nothing, so skip worktree isolation entirely
+    worktree: config.worktreeEnabled && !DEMO_MODE ? { mergeOnComplete: true, alwaysIsolate: true } : false,
     retry: { maxRetries: 2, escalateToLeader: true },
     promptsDir: path.join(CONFIG_DIR, "data", "prompts"),
     // Read on every spawn so edits to config.json apply to the next run
@@ -1613,7 +1630,8 @@ async function main() {
       },
     },
   );
-  scanner.start();
+  // Demo mode: do not adopt the user's real CLI sessions into a demo office
+  if (!DEMO_MODE) scanner.start();
 
   const backendNames = config.detectedBackends.map((id) => getBackend(id)?.name ?? id).join(", ");
   console.log(`[Gateway] AI backends: ${backendNames || "none detected"} (default: ${getBackend(config.defaultBackend)?.name ?? config.defaultBackend})`);

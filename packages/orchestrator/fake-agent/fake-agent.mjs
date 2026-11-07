@@ -13,7 +13,8 @@
  *       "text": "SUMMARY: done",              // string or array of lines (one assistant text block)
  *       "toolUses": [{ "name": "Write", "input": { "file_path": "index.html" } }],
  *       "writeFiles": { "index.html": "<h1>hi</h1>" },  // written relative to cwd
- *       "delayMs": 0, "exitCode": 0, "stderr": ""
+ *       "delayMs": 0, "jitterMs": 0,           // sleep delayMs + a random 0..jitterMs
+ *       "exitCode": 0, "stderr": ""
  *     }
  *   ],
  *   "default": { "text": "SUMMARY: nothing to do" }
@@ -56,7 +57,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sessionId = `fake-${randomBytes(6).toString("hex")}`;
 emit({ type: "system", subtype: "init", session_id: sessionId });
 
-if (rule.delayMs) await sleep(rule.delayMs);
+const delay = (rule.delayMs ?? 0) + (rule.jitterMs ? Math.floor(Math.random() * rule.jitterMs) : 0);
+if (delay > 0) await sleep(delay);
 
 for (const [file, content] of Object.entries(rule.writeFiles ?? {})) {
   const abs = resolve(process.cwd(), file);
