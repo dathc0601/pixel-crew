@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { resolveSpawnPermission } from "@pixel-crew/orchestrator";
+import { resolveSpawnPermission, SUBAGENT_TOOL_NAMES, SUBAGENT_TOOLS_ALLOW } from "@pixel-crew/orchestrator";
 import type { BuildArgsOpts } from "@pixel-crew/orchestrator";
 import { checkRootAllowed } from "../root-guard.js";
 import { isTelegramUserAllowed } from "../telegram-channel.js";
@@ -81,6 +81,29 @@ describe("agent permission defaults (P0.2)", () => {
     assert.equal(hasAutoPermissionMode(help), true);
     assert.equal(hasAutoPermissionMode(`--permission-mode <mode> (choices: "acceptEdits", "default", "plan")`), false);
     assert.equal(hasAutoPermissionMode("no such flag"), false);
+  });
+});
+
+describe("Lead tool flags for Claude (P1.2)", () => {
+  const claude = () => getBackend("claude")!;
+  const flagValue = (args: string[], name: string) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
+
+  it("no tools: --tools \"\"", () => {
+    const args = claude().buildArgs("plan", { permissionMode: "auto", noTools: true });
+    assert.equal(flagValue(args, "--tools"), "");
+    assert.ok(!args.includes("--disallowedTools"));
+  });
+
+  it("subagents only: --tools Agent (wins over noTools)", () => {
+    const args = claude().buildArgs("plan", { permissionMode: "auto", noTools: true, tools: SUBAGENT_TOOLS_ALLOW });
+    assert.equal(flagValue(args, "--tools"), "Agent");
+    assert.equal(args.filter((a) => a === "--tools").length, 1);
+  });
+
+  it("self-work without subagents: default tools, --disallowedTools Agent,Task", () => {
+    const args = claude().buildArgs("work", { permissionMode: "auto", disallowedTools: SUBAGENT_TOOL_NAMES });
+    assert.ok(!args.includes("--tools"));
+    assert.equal(flagValue(args, "--disallowedTools"), "Agent,Task");
   });
 });
 

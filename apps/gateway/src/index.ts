@@ -10,7 +10,9 @@ import { backendPermissionMode } from "@pixel-crew/shared";
 import { runSetup } from "./setup.js";
 import { detectBackends, getBackend, getAllBackends } from "./backends.js";
 import { createOrchestrator, getMergeHistory, previewServer, recordProjectRatings, parseAgentOutput, setSessionDir, setStorageRoot, syncAgentDefs, type Orchestrator, type OrchestratorEvent, type RuntimeOwnerInfo, type TeamPhaseChangedEvent } from "@pixel-crew/orchestrator";
-import type { Command, GatewayEvent, UserRole } from "@pixel-crew/shared";
+import type { Command, GatewayEvent, UserRole, WorkItem as WireWorkItem } from "@pixel-crew/shared";
+import type { WorkItem } from "@pixel-crew/orchestrator";
+import { broadcastOfficeConfigChanges, handleOfficeConfigCommand, isOfficeConfigCommand } from "./office-config-commands.js";
 import type { CommandMeta } from "./transport.js";
 import { DEFAULT_AGENT_DEFS, type AgentDefinition } from "@pixel-crew/shared";
 import { nanoid } from "nanoid";
@@ -72,7 +74,51 @@ function persistTeamState() {
     };
   }
 
-  saveTeamState({ agents, team });
+  saveTeamState({ agents, team, workItems: orc.getWorkItems() });
+}
+
+/** Wire shape of a work item (daemon-internal fields such as repoPath stay local). */
+function toWireWorkItem(item: WorkItem): WireWorkItem {
+  return {
+    id: item.id,
+    parentId: item.parentId,
+    origin: item.origin,
+    title: item.title,
+    prompt: item.prompt,
+    priority: item.priority,
+    ...(item.requiredSkills ? { requiredSkills: item.requiredSkills } : {}),
+    preferredAgentId: item.preferredAgentId,
+    pinned: item.pinned,
+    state: item.state,
+    assigneeId: item.assigneeId,
+    attempts: item.attempts,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+    heartbeatAt: item.heartbeatAt,
+    ...(item.selfWork ? { selfWork: true } : {}),
+    ...(item.flags ? { flags: item.flags } : {}),
+    ...(item.error ? { error: item.error } : {}),
+  };
+}
+
+/**
+ * Give the team a project directory if it has none yet (BOSS_ASSIGN skips the plan
+ * approval step that normally creates it).
+ */
+function ensureTeamProjectDir(nameSource: string): string {
+  const existing = orc.getTeamProjectDir();
+  if (existing && existsSync(existing)) return existing;
+  const projectName = extractProjectName(nameSource);
+  setProjectName(projectName);
+  const projectDir = createUniqueProjectDir(teamWorkDir || config.defaultWorkspace, projectName);
+  try {
+    execSync("git init", { cwd: projectDir, stdio: "pipe" });
+    execSync("git -c user.name=PixelCrew -c user.email=bot@pixel-crew.local commit --allow-empty -m 'init'", { cwd: projectDir, stdio: "pipe" });
+  } catch (err) {
+    console.error(`[Gateway] Failed to init git: ${(err as Error).message}`);
+  }
+  orc.setTeamProjectDir(projectDir);
+  return projectDir;
 }
 
 function showPairCode() {
@@ -365,6 +411,17 @@ function mapOrchestratorEvent(e: OrchestratorEvent): GatewayEvent | null {
     }
     case "token:update":
       return { type: "TOKEN_UPDATE", agentId: e.agentId, inputTokens: e.inputTokens, outputTokens: e.outputTokens };
+    case "work:updated":
+      persistTeamState();
+      return { type: "WORK_ITEM_UPDATED", item: toWireWorkItem(e.item) };
+    case "handoff":
+      return { type: "HANDOFF", handoffId: e.handoffId, fromId: e.fromId, toId: e.toId, workItemId: e.workItemId, kind: e.kind, label: e.label, durationMs: e.durationMs };
+    case "lead:waiting":
+      return { type: "LEAD_WAITING", leadId: e.leadId, queueLength: e.queueLength, reason: e.reason };
+    case "lead:self-work":
+      return { type: "LEAD_SELF_WORK", leadId: e.leadId, workItemId: e.workItemId };
+    case "lead:subagent-started":
+      return { type: "LEAD_SUBAGENT_STARTED", leadId: e.leadId, workItemId: e.workItemId, description: e.description, ...(e.subagentType ? { subagentType: e.subagentType } : {}) };
     // Log-only events — no wire protocol equivalent
     case "task:retrying":
       console.log(`[Retry] Agent ${e.agentId} retrying task ${e.taskId} (attempt ${e.attempt}/${e.maxRetries})`);
@@ -415,6 +472,16 @@ const SUGGEST_COOLDOWN_MS = 3000;
 // ---------------------------------------------------------------------------
 
 function handleCommand(parsed: Command, meta: CommandMeta) {
+  // Office settings: owner-only, with an explicit rejection for other sessions
+  if (isOfficeConfigCommand(parsed)) {
+    handleOfficeConfigCommand(parsed, meta, {
+      manager: officeConfig,
+      broadcast: publishEvent,
+      reply: (event) => sendToClient(meta.clientId, event),
+    });
+    return;
+  }
+
   // RBAC enforcement
   if (!ALLOWED[meta.role].has("*") && !ALLOWED[meta.role].has(parsed.type)) {
     console.log(`[RBAC] Blocked ${parsed.type} from ${meta.role} (client=${meta.clientId})`);
@@ -657,10 +724,33 @@ function handleCommand(parsed: Command, meta: CommandMeta) {
         bufferEvent(teamChatEvt);
         publishEvent(teamChatEvt);
 
+        // P1.7: no automatic "greet" run. Nothing spends tokens until the Boss assigns work.
         orc.setTeamPhase(teamId, "create", leadAgentId);
-        const greetTaskId = nanoid();
-        orc.runTask(leadAgentId, greetTaskId, "Greet the user and ask what they would like to build.", { phaseOverride: "create" });
       }
+      persistTeamState();
+      break;
+    }
+    case "BOSS_ASSIGN": {
+      const leadId = orc.getAllAgents().find((a) => a.isTeamLead)?.agentId;
+      if (!leadId) {
+        publishEvent({ type: "TEAM_CHAT", fromAgentId: "boss", message: "Hire a team before assigning work.", messageType: "warning", timestamp: Date.now() });
+        break;
+      }
+      ensureTeamProjectDir(parsed.prompt);
+      const result = orc.bossAssign({
+        prompt: parsed.prompt,
+        urgent: parsed.urgent,
+        allowLeadSelfWork: parsed.allowLeadSelfWork,
+        allowSubagents: parsed.allowSubagents,
+      });
+      if (!result.ok) {
+        publishEvent({ type: "TEAM_CHAT", fromAgentId: "boss", message: result.error, messageType: "warning", timestamp: Date.now() });
+      } else {
+        const chat = { type: "TEAM_CHAT" as const, fromAgentId: "boss", toAgentId: leadId, message: parsed.prompt, messageType: "delegation" as const, taskId: result.item.id, timestamp: Date.now() };
+        bufferEvent(chat);
+        publishEvent(chat);
+      }
+      persistTeamState();
       break;
     }
     case "STOP_TEAM": {
@@ -834,6 +924,8 @@ function handleCommand(parsed: Command, meta: CommandMeta) {
           status: ext.status,
         });
       }
+      // Work pool, so reconnecting clients can rebuild the board (§7.7)
+      for (const item of orc.getWorkItems()) publishEvent({ type: "WORK_ITEM_UPDATED", item: toWireWorkItem(item) });
       publishEvent({ type: "AGENT_DEFS", agents: agentDefs });
       publishEvent({ type: "BACKENDS_AVAILABLE", backends: config.detectedBackends });
       publishEvent({ type: "SKILL_LIST", skills: listSkills() });
@@ -1264,6 +1356,9 @@ async function main() {
     promptsDir: path.join(CONFIG_DIR, "data", "prompts"),
     // Read on every spawn so edits to config.json apply to the next run
     permissionPolicy: (backendId) => backendPermissionMode(getOfficeConfig(), backendId),
+    // Read at every hand-off / policy decision, so hot-reloaded values apply to the next one
+    handoffDurationMs: () => getOfficeConfig().handoff.durationMs,
+    leadPolicy: () => getOfficeConfig().lead,
   });
 
   agentDefs = loadAgentDefs();
@@ -1356,6 +1451,12 @@ async function main() {
     }
   }
 
+  // Resume the work pool (running items are queued again)
+  if (savedState.workItems?.length) {
+    console.log(`[Gateway] Restoring ${savedState.workItems.length} work item(s)`);
+    orc.restoreWorkItems(savedState.workItems);
+  }
+
   // Re-apply global autoMerge setting to all agents (overrides stale per-agent values
   // from teamState in case SAVE_CONFIG wasn't persisted before a crash/restart)
   const globalAutoMerge = config.autoMergeEnabled ?? true;
@@ -1416,6 +1517,11 @@ async function main() {
   orc.on("agent:fired", forwardEvent);
   orc.on("task:result-returned", forwardEvent);
   orc.on("team:phase", forwardEvent);
+  orc.on("work:updated", forwardEvent);
+  orc.on("handoff", forwardEvent);
+  orc.on("lead:waiting", forwardEvent);
+  orc.on("lead:self-work", forwardEvent);
+  orc.on("lead:subagent-started", forwardEvent);
 
   // Start external output reader
   outputReader = new ExternalOutputReader();
@@ -1534,6 +1640,8 @@ async function main() {
   showPairCode();
 
   // Hot-reload the office section of config.json (permissions, lead policy, hand-off timing)
+  // and tell every client about each change (UI edits and hand edits alike)
+  broadcastOfficeConfigChanges(officeConfig, publishEvent);
   officeConfig.watch();
   if (officeConfig.error) console.warn(`[Gateway] Office config has errors, using defaults: ${officeConfig.error}`);
 

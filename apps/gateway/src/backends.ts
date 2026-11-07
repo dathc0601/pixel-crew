@@ -38,7 +38,10 @@ const backends: AIBackend[] = [
           args.push("--continue");
         }
       }
-      if (opts.noTools) args.push("--tools", "");
+      // --tools / --disallowedTools take a comma-separated list (claude --help, 2.1.319)
+      if (opts.tools) args.push("--tools", opts.tools.join(","));
+      else if (opts.noTools) args.push("--tools", "");
+      if (opts.disallowedTools?.length) args.push("--disallowedTools", opts.disallowedTools.join(","));
       if (opts.model) args.push("--model", opts.model);
       if (opts.agentType) args.push("--agent", opts.agentType);
       if (opts.worktree) args.push("--worktree");

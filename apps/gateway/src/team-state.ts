@@ -5,6 +5,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, appendFileSync, readdirSync } from "fs";
 import path from "path";
 import type { GatewayEvent } from "@pixel-crew/shared";
+import type { WorkItem } from "@pixel-crew/orchestrator";
 import { config, CONFIG_DIR } from "./config.js";
 // Project history dir is shared (archives are instance-agnostic)
 const PROJECTS_DIR = path.join(CONFIG_DIR, "data", "project-history");
@@ -41,6 +42,8 @@ export interface PersistedTeam {
 export interface TeamState {
   agents: PersistedAgent[];
   team: PersistedTeam | null;
+  /** Dispatcher pool (P1.1); running items are queued again on restart */
+  workItems?: WorkItem[];
 }
 
 const EMPTY_STATE: TeamState = { agents: [], team: null };

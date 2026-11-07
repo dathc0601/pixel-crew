@@ -1,6 +1,6 @@
 import { EventEmitter } from "events";
-import { existsSync, readFileSync, watch, type FSWatcher } from "fs";
-import { basename, dirname } from "path";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, watch, writeFileSync, type FSWatcher } from "fs";
+import { basename, dirname, join } from "path";
 import { OfficeConfigSchema, DEFAULT_OFFICE_CONFIG, type OfficeConfig } from "@pixel-crew/shared";
 
 export type OfficeConfigParse = { ok: true; config: OfficeConfig } | { ok: false; error: string };
@@ -14,6 +14,25 @@ export function parseOfficeSection(rawConfig: unknown): OfficeConfigParse {
     .map((i) => `office.${i.path.join(".")}: ${i.message}`)
     .join("; ");
   return { ok: false, error };
+}
+
+export type OfficeConfigUpdate =
+  | { ok: true; config: OfficeConfig; changed: boolean }
+  | { ok: false; error: string };
+
+type Json = Record<string, unknown>;
+const isPlainObject = (v: unknown): v is Json => !!v && typeof v === "object" && !Array.isArray(v);
+
+/** Deep-merge `patch` into `base` (new object). `null` deletes a key; arrays and scalars replace. */
+export function mergeOfficePatch(base: Json, patch: Json): Json {
+  const out: Json = { ...base };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) delete out[key];
+    else if (isPlainObject(value) && isPlainObject(out[key])) out[key] = mergeOfficePatch(out[key] as Json, value);
+    else if (isPlainObject(value)) out[key] = mergeOfficePatch({}, value);
+    else out[key] = value;
+  }
+  return out;
 }
 
 interface OfficeConfigEvents {
@@ -60,6 +79,41 @@ export class OfficeConfigManager extends EventEmitter<OfficeConfigEvents> {
     this.current = parsed.config;
     if (changed) this.emit("change", this.current);
     return changed;
+  }
+
+  /**
+   * Apply a deep-partial patch to the office section and write config.json atomically
+   * (temp file + rename in the same directory). Other top-level keys are kept as they
+   * are. Nothing is written when the merged section fails validation.
+   */
+  update(patch: Json): OfficeConfigUpdate {
+    let raw: Json = {};
+    if (existsSync(this.file)) {
+      try {
+        const parsed = JSON.parse(readFileSync(this.file, "utf-8"));
+        if (!isPlainObject(parsed)) return { ok: false, error: "config.json is not a JSON object; fix it by hand first" };
+        raw = parsed;
+      } catch (err) {
+        return { ok: false, error: `config.json is not valid JSON (${(err as Error).message}); fix it by hand first` };
+      }
+    }
+    const section = isPlainObject(raw.office) ? raw.office : {};
+    const merged = mergeOfficePatch(section, patch);
+    const parsed = parseOfficeSection({ office: merged });
+    if (!parsed.ok) return { ok: false, error: parsed.error };
+
+    const dir = dirname(this.file);
+    const tmp = join(dir, `.${basename(this.file)}.${process.pid}.${Date.now()}.tmp`);
+    try {
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      writeFileSync(tmp, JSON.stringify({ ...raw, office: merged }, null, 2) + "\n", "utf-8");
+      renameSync(tmp, this.file);
+    } catch (err) {
+      try { unlinkSync(tmp); } catch { /* not created */ }
+      return { ok: false, error: `Could not write config.json: ${(err as Error).message}` };
+    }
+    const changed = this.reload();
+    return { ok: true, config: this.current, changed };
   }
 
   private reject(error: string): boolean {
