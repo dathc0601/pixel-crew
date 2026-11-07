@@ -6,14 +6,14 @@
   "build": {
     "frontendDist": "../../web/out",
     "devUrl": "http://localhost:3000",
-    "beforeBuildCommand": "bash scripts/build-desktop.sh",
-    "beforeDevCommand": "pnpm --filter pixel-crew dev & pnpm --filter web dev"
+    "beforeBuildCommand": "node scripts/build-desktop.mjs",
+    "beforeDevCommand": "node scripts/dev-servers.mjs"
   },
   "app": {
     "security": {
-      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:; img-src 'self' data: blob: http://localhost:* http://127.0.0.1:*; connect-src 'self' ws://localhost:* ws://127.0.0.1:* http://localhost:* http://127.0.0.1:*; frame-src http://localhost:* http://127.0.0.1:*; media-src 'self' data: blob:"
+      "csp": "default-src 'self' 'unsafe-inline' data: blob:; img-src 'self' data: blob: http://localhost:* http://127.0.0.1:*; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost ws://localhost:* ws://127.0.0.1:* http://localhost:* http://127.0.0.1:*; frame-src http://localhost:* http://127.0.0.1:*; media-src 'self' data: blob:; object-src 'none'; base-uri 'self'"
     },
-    "withGlobalTauri": true,
+    "withGlobalTauri": false,
     "windows": [
       {
         "title": "Pixel Crew",
@@ -24,15 +24,17 @@
         "maximized": true,
         "url": "pair"
       }
-    ],
-    "trayIcon": {
-      "iconPath": "icons/icon.png",
-      "iconAsTemplate": true
-    }
+    ]
   },
   "bundle": {
     "active": true,
-    "targets": ["dmg", "app"],
+    "targets": [
+      "app",
+      "dmg",
+      "nsis",
+      "deb",
+      "appimage"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -41,12 +43,17 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "sidecar/node": "sidecar/node",
-      "sidecar/gateway.js": "sidecar/gateway.js",
-      "sidecar/web/": "sidecar/web/"
+      "sidecar/": "sidecar/"
     },
+    "shortDescription": "A pixel-art office of AI coding agents",
+    "category": "DeveloperTool",
     "macOS": {
       "minimumSystemVersion": "10.15"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
     }
   },
   "plugins": {

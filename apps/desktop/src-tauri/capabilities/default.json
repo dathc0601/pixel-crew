@@ -1,15 +1,9 @@
 {
   "identifier": "default",
-  "description": "Default capabilities for Pixel Crew desktop",
+  "description": "Webview permissions for Pixel Crew desktop. The gateway sidecar is started from Rust, so the webview gets no shell access at all (no spawn, execute or stdin writes).",
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "shell:allow-spawn",
-    "shell:allow-execute",
-    "shell:allow-stdin-write",
-    "autostart:allow-enable",
-    "autostart:allow-disable",
-    "autostart:allow-is-enabled",
     "notification:default"
   ]
 }

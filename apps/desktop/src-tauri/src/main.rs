@@ -1,12 +1,21 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod runtime;
+
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
 use tauri::{
-    Emitter, Manager,
+    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    menu::{Menu, MenuItem},
+    webview::PageLoadEvent,
+    AppHandle, Emitter, Manager,
 };
-use tauri_plugin_shell::ShellExt;
-use std::sync::Mutex;
+use tauri_plugin_autostart::ManagerExt as _;
+use tauri_plugin_notification::NotificationExt as _;
+use tauri_plugin_shell::{process::CommandChild, ShellExt};
 
 #[tauri::command]
 fn bounce_dock(window: tauri::Window) {
@@ -21,40 +30,223 @@ fn get_gateway_info(state: tauri::State<'_, Mutex<GatewayInfo>>) -> Option<serde
 }
 
 struct GatewayState {
-    child: Option<tauri_plugin_shell::process::CommandChild>,
+    child: Option<CommandChild>,
     pid: Option<u32>,
+    /// Set when the sidecar process has terminated (works on every OS, unlike kill(pid, 0)).
+    exited: Arc<AtomicBool>,
 }
 
 struct GatewayInfo {
     ready_payload: Option<serde_json::Value>,
 }
 
-fn kill_gateway(app: &tauri::AppHandle) {
+/// A problem that keeps the office from starting (no Node.js, no gateway bundle).
+/// Shown over the window on every page load until the app restarts.
+struct StartupError(Mutex<Option<String>>);
+
+const NODE_MISSING: &str = "Pixel Crew needs Node.js 22 or newer.\n\n\
+Install it from https://nodejs.org (or with nvm, fnm, Volta or Homebrew), \
+then quit Pixel Crew from the tray icon and open it again. \
+To use a specific Node.js, set PIXEL_CREW_NODE to its path.";
+
+/// Quit: let the gateway shut down cleanly (it stops agent CLIs and saves state),
+/// then force-kill its process tree if it is still running after 3 seconds.
+fn kill_gateway(app: &AppHandle) {
     let state = app.state::<Mutex<GatewayState>>();
     let mut guard = state.lock().unwrap();
-    let pid = match guard.pid.take() {
-        Some(p) => p,
-        None => return, // Already killed or never spawned
-    };
-    // Drop Tauri child handle without calling kill (we manage signals ourselves)
-    let _ = guard.child.take();
-    drop(guard); // Release lock before blocking
-
-    let pid_i32 = pid as i32;
-    // 1. SIGTERM → gateway runs cleanup (kills agent CLIs, saves state)
-    unsafe { libc::kill(pid_i32, libc::SIGTERM); }
-    println!("[desktop] Sent SIGTERM to gateway (pid={})", pid);
-    // 2. Wait up to 2 seconds for graceful exit
-    for _ in 0..20 {
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        if unsafe { libc::kill(pid_i32, 0) } != 0 {
+    let Some(pid) = guard.pid.take() else { return };
+    let exited = guard.exited.clone();
+    // Dropping the child handle closes the gateway's stdin; started with
+    // PIXEL_CREW_EXIT_ON_STDIN_EOF=1 it shuts down on EOF (the graceful path on Windows).
+    drop(guard.child.take());
+    drop(guard);
+    if exited.load(Ordering::SeqCst) {
+        return;
+    }
+    request_graceful_exit(pid);
+    for _ in 0..30 {
+        std::thread::sleep(Duration::from_millis(100));
+        if exited.load(Ordering::SeqCst) {
             println!("[desktop] Gateway exited gracefully");
             return;
         }
     }
-    // 3. Still alive after 2s — force kill entire process group
-    unsafe { libc::kill(-pid_i32, libc::SIGKILL); }
-    println!("[desktop] Gateway force-killed (SIGKILL)");
+    force_kill_tree(pid);
+    println!("[desktop] Gateway force-killed (pid={pid})");
+}
+
+#[cfg(unix)]
+fn request_graceful_exit(pid: u32) {
+    // SIGTERM runs the gateway's cleanup (stops agent CLIs, saves state)
+    unsafe {
+        libc::kill(pid as libc::pid_t, libc::SIGTERM);
+    }
+}
+
+#[cfg(not(unix))]
+fn request_graceful_exit(_pid: u32) {
+    // Windows has no SIGTERM for console programs: the closed stdin above is the signal
+}
+
+#[cfg(unix)]
+fn force_kill_tree(pid: u32) {
+    // Agent CLIs run in their own process groups and are stopped by the gateway itself
+    unsafe {
+        libc::kill(pid as libc::pid_t, libc::SIGKILL);
+    }
+}
+
+#[cfg(windows)]
+fn force_kill_tree(pid: u32) {
+    let mut cmd = std::process::Command::new("taskkill");
+    cmd.args(["/PID", &pid.to_string(), "/T", "/F"]);
+    runtime::hide_console(&mut cmd);
+    let _ = cmd.status();
+}
+
+/// Script that lays a full-window message over whatever page is showing.
+fn overlay_script(message: &str) -> String {
+    let msg = serde_json::to_string(message).unwrap_or_else(|_| "\"\"".into());
+    format!(
+        "(function(){{var m={msg};function show(){{var d=document.getElementById('pixel-crew-startup-error');\
+if(!d){{d=document.createElement('div');d.id='pixel-crew-startup-error';d.setAttribute('role','alert');\
+d.style.cssText='position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;\
+padding:32px;background:#16161d;color:#f2f2f2;font:16px/1.6 system-ui,sans-serif;white-space:pre-wrap;text-align:center';\
+var t=document.createElement('div');t.style.maxWidth='36em';d.appendChild(t);document.body.appendChild(d);}}d.firstChild.textContent=m;}}\
+if(document.body)show();else document.addEventListener('DOMContentLoaded',show);}})();"
+    )
+}
+
+fn show_startup_error(app: &AppHandle, message: &str) {
+    eprintln!("[desktop] {message}");
+    *app.state::<StartupError>().0.lock().unwrap() = Some(message.to_string());
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.eval(overlay_script(message));
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+    let _ = app.notification().builder().title("Pixel Crew").body(message).show();
+}
+
+fn file_len(path: &Path) -> u64 {
+    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+}
+
+/// Working directory for the gateway: the filesystem root, which the gateway reads as
+/// "no project folder given" and answers with ~/.pixel-crew/projects.
+fn root_dir() -> PathBuf {
+    if cfg!(windows) {
+        let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+        PathBuf::from(format!("{drive}\\"))
+    } else {
+        PathBuf::from("/")
+    }
+}
+
+/// Start the gateway sidecar on system Node.js (or the bundled fallback).
+fn start_gateway(app: &AppHandle) -> Result<(), String> {
+    let sidecar_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|e| format!("Cannot find the app resources: {e}"))?
+        .join("sidecar");
+    let gateway_js = sidecar_dir.join("gateway.js");
+    let web_dir = sidecar_dir.join("web");
+    if file_len(&gateway_js) == 0 {
+        return Err("This build of Pixel Crew has no gateway bundle (sidecar/gateway.js is empty).\n\n\
+Build the app with `pnpm build:desktop`."
+            .into());
+    }
+
+    let path = runtime::resolve_path();
+    let bundled = sidecar_dir.join(if cfg!(windows) { "node.exe" } else { "node" });
+    let node = if let Some(n) = runtime::find_system_node(&path) {
+        println!("[desktop] Using system Node.js {} at {}", n.version, n.path.display());
+        n.path
+    } else if std::env::var_os("PIXEL_CREW_NODE").is_none() && file_len(&bundled) > 0 {
+        println!("[desktop] No system Node.js >= {}; using the bundled runtime", runtime::MIN_NODE_MAJOR);
+        bundled
+    } else {
+        return Err(NODE_MISSING.into());
+    };
+    let path = match node.parent() {
+        Some(dir) => runtime::prepend_dir(&path, dir),
+        None => path,
+    };
+
+    let mut command = app
+        .shell()
+        .command(&node)
+        .args([gateway_js.as_os_str()])
+        .current_dir(root_dir())
+        .env("PATH", &path)
+        .env("WEB_DIR", web_dir.as_os_str())
+        .env("NO_OPEN", "1")
+        .env("GATEWAY_ID", "desktop")
+        .env("NODE_ENV", "production")
+        .env("PIXEL_CREW_EXIT_ON_STDIN_EOF", "1");
+    if let Some(home) = std::env::var_os("HOME").filter(|h| !h.is_empty()) {
+        command = command.env("HOME", home);
+    }
+    let (mut rx, child) = command
+        .spawn()
+        .map_err(|e| format!("Could not start the Pixel Crew gateway: {e}"))?;
+
+    let exited = Arc::new(AtomicBool::new(false));
+    {
+        let state = app.state::<Mutex<GatewayState>>();
+        let mut guard = state.lock().unwrap();
+        guard.pid = Some(child.pid());
+        guard.child = Some(child);
+        guard.exited = exited.clone();
+    }
+
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        use tauri_plugin_shell::process::CommandEvent;
+        while let Some(event) = rx.recv().await {
+            match event {
+                CommandEvent::Stdout(line) => {
+                    let text = String::from_utf8_lossy(&line);
+                    println!("[gateway] {}", text.trim_end());
+                    // GATEWAY_READY {"port":..,"gatewayId":..}: store it (get_gateway_info) and emit it
+                    if let Some(json_str) = text.strip_prefix("GATEWAY_READY ") {
+                        if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str.trim()) {
+                            println!("[desktop] Gateway ready: {value}");
+                            app_handle.state::<Mutex<GatewayInfo>>().lock().unwrap().ready_payload = Some(value.clone());
+                            let _ = app_handle.emit("gateway-ready", value);
+                        }
+                    }
+                }
+                CommandEvent::Stderr(line) => {
+                    eprintln!("[gateway] {}", String::from_utf8_lossy(&line).trim_end());
+                }
+                CommandEvent::Terminated(status) => {
+                    println!("[gateway] exited: {status:?}");
+                    exited.store(true, Ordering::SeqCst);
+                    let never_ready = app_handle.state::<Mutex<GatewayInfo>>().lock().unwrap().ready_payload.is_none();
+                    if never_ready {
+                        show_startup_error(
+                            &app_handle,
+                            &format!("The Pixel Crew gateway stopped before it was ready (exit code {:?}).\n\n\
+Another Pixel Crew may already be running, or its data folder may be unreadable.",
+                                status.code),
+                        );
+                    }
+                    break;
+                }
+                _ => {}
+            }
+        }
+    });
+    Ok(())
+}
+
+fn show_main_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
 }
 
 fn main() {
@@ -67,23 +259,42 @@ fn main() {
             Some(vec![]),
         ))
         .plugin(tauri_plugin_notification::init())
-        .manage(Mutex::new(GatewayState { child: None, pid: None }))
+        .manage(Mutex::new(GatewayState { child: None, pid: None, exited: Arc::new(AtomicBool::new(false)) }))
         .manage(Mutex::new(GatewayInfo { ready_payload: None }))
+        .manage(StartupError(Mutex::new(None)))
+        .on_page_load(|webview, payload| {
+            if payload.event() != PageLoadEvent::Finished {
+                return;
+            }
+            let error = webview.app_handle().state::<StartupError>().0.lock().unwrap().clone();
+            if let Some(message) = error {
+                let _ = webview.eval(overlay_script(&message));
+            }
+        })
         .setup(move |app| {
             // -- System tray --
             let show = MenuItem::with_id(app, "show", "Show Window", true, None::<&str>)?;
+            let launch_at_login = app.autolaunch().is_enabled().unwrap_or(false);
+            let autostart = CheckMenuItem::with_id(app, "autostart", "Launch at Login", true, launch_at_login, None::<&str>)?;
+            let separator = PredefinedMenuItem::separator(app)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let menu = Menu::with_items(app, &[&show, &autostart, &separator, &quit])?;
 
-            TrayIconBuilder::new()
+            let autostart_item = autostart.clone();
+            TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().unwrap().clone())
+                .tooltip("Pixel Crew")
                 .menu(&menu)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "show" => {
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
+                .on_menu_event(move |app, event| match event.id.as_ref() {
+                    "show" => show_main_window(app),
+                    "autostart" => {
+                        let manager = app.autolaunch();
+                        let enable = !manager.is_enabled().unwrap_or(false);
+                        let result = if enable { manager.enable() } else { manager.disable() };
+                        if let Err(e) = result {
+                            eprintln!("[desktop] Could not change Launch at Login: {e}");
                         }
+                        let _ = autostart_item.set_checked(manager.is_enabled().unwrap_or(false));
                     }
                     "quit" => {
                         kill_gateway(app);
@@ -98,170 +309,31 @@ fn main() {
                         ..
                     } = event
                     {
-                        let app = tray.app_handle();
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                        }
+                        show_main_window(tray.app_handle());
                     }
                 })
                 .build(app)?;
 
-            // -- Spawn gateway sidecar (production only) --
+            // -- Gateway sidecar (production only) --
             if !is_dev {
-                let resource_dir = app
-                    .path()
-                    .resource_dir()
-                    .expect("failed to resolve resource dir");
-                let sidecar_dir = resource_dir.join("sidecar");
-                let node_bin = sidecar_dir.join("node");
-                let gateway_js = sidecar_dir.join("gateway.js");
-                let web_dir = sidecar_dir.join("web");
-
-                // Resolve user's full PATH — GUI apps inherit a minimal PATH
-                // macOS: get PATH from login shell, then append well-known CLI tool dirs
-                // that may only be added in .zshrc (not sourced by non-interactive login shells)
-                // Windows/Linux: inherit from environment (usually sufficient)
-                let full_path = if cfg!(target_os = "macos") {
-                    let resolve_path = |shell: &str| -> Option<String> {
-                        std::process::Command::new(shell)
-                            .args(["-l", "-c", "printenv PATH"])
-                            .output()
-                            .ok()
-                            .and_then(|o| if o.status.success() { String::from_utf8(o.stdout).ok() } else { None })
-                            .and_then(|p| p.lines().rev().find(|l| !l.trim().is_empty()).map(|l| l.trim().to_string()))
-                            .filter(|p| !p.is_empty())
-                    };
-                    let mut base = resolve_path("/bin/zsh")
-                        .or_else(|| resolve_path("/bin/bash"))
-                        .unwrap_or_else(|| std::env::var("PATH").unwrap_or_default());
-
-                    // Append common CLI tool paths that .zshrc might add but login shell misses
-                    let home = std::env::var("HOME").unwrap_or_default();
-                    // Detect NVM's current node bin directory (NVM is loaded in .bashrc, not login shell)
-                    let nvm_bin = std::fs::read_to_string(format!("{}/.nvm/alias/default", home))
-                        .ok()
-                        .filter(|s| !s.trim().is_empty())
-                        .and_then(|alias| {
-                            let v = alias.trim().to_string();
-                            // Resolve alias like "22" → find matching version dir
-                            let versions_dir = format!("{}/.nvm/versions/node", home);
-                            if let Ok(entries) = std::fs::read_dir(&versions_dir) {
-                                let mut matches: Vec<String> = entries
-                                    .filter_map(|e| e.ok())
-                                    .map(|e| e.file_name().to_string_lossy().to_string())
-                                    .filter(|name| name.starts_with(&format!("v{}", v)) || name == &format!("v{}", v))
-                                    .collect();
-                                matches.sort();
-                                matches.last().map(|m| format!("{}/{}/bin", versions_dir, m))
-                            } else {
-                                None
-                            }
-                        })
-                        .or_else(|| {
-                            // Fallback: pick the latest installed version
-                            let versions_dir = format!("{}/.nvm/versions/node", home);
-                            std::fs::read_dir(&versions_dir).ok().and_then(|entries| {
-                                let mut versions: Vec<String> = entries
-                                    .filter_map(|e| e.ok())
-                                    .map(|e| e.file_name().to_string_lossy().to_string())
-                                    .filter(|n| n.starts_with('v'))
-                                    .collect();
-                                versions.sort();
-                                versions.last().map(|v| format!("{}/{}/bin", versions_dir, v))
-                            })
-                        });
-
-                    let mut extra_paths = vec![
-                        format!("{}/.local/bin", home),         // claude, pip, pipx
-                        format!("{}/.local/share/pnpm", home),  // pnpm global
-                        format!("{}/.cargo/bin", home),         // rust/cargo
-                        "/opt/homebrew/bin".to_string(),        // homebrew (arm64)
-                        "/usr/local/bin".to_string(),           // homebrew (x86)
-                    ];
-                    if let Some(nvm_path) = nvm_bin {
-                        println!("[desktop] NVM node bin: {}", nvm_path);
-                        extra_paths.insert(0, nvm_path);        // NVM node/npm/npx
-                    }
-                    for p in &extra_paths {
-                        if !base.split(':').any(|e| e == p) && std::path::Path::new(p).is_dir() {
-                            base.push(':');
-                            base.push_str(p);
-                        }
-                    }
-                    base
-                } else {
-                    std::env::var("PATH").unwrap_or_default()
-                };
-
-                let shell = app.shell();
-                match shell
-                    .command(node_bin.to_str().unwrap())
-                    .args([gateway_js.to_str().unwrap()])
-                    .env("PATH", &full_path)
-                    .env("HOME", std::env::var("HOME").unwrap_or_default())
-                    .env("WEB_DIR", web_dir.to_str().unwrap())
-                    .env("NO_OPEN", "1")
-                    .env("GATEWAY_ID", "desktop")
-                    .env("NODE_ENV", "production")
-                    .spawn()
-                {
-                    Ok((mut rx, child)) => {
-                        let pid = child.pid();
-                        let state = app.state::<Mutex<GatewayState>>();
-                        {
-                            let mut guard = state.lock().unwrap();
-                            guard.child = Some(child);
-                            guard.pid = Some(pid);
-                        }
-
-                        let app_handle = app.handle().clone();
-                        tauri::async_runtime::spawn(async move {
-                            use tauri_plugin_shell::process::CommandEvent;
-                            while let Some(event) = rx.recv().await {
-                                match event {
-                                    CommandEvent::Stdout(line) => {
-                                        let text = String::from_utf8_lossy(&line);
-                                        println!("[gateway] {}", text);
-
-                                        // Parse GATEWAY_READY signal, store it, and emit to webview
-                                        if let Some(json_str) = text.strip_prefix("GATEWAY_READY ") {
-                                            if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str.trim()) {
-                                                println!("[desktop] Gateway ready: {}", value);
-                                                // Store for get_gateway_info command (handles race where
-                                                // webview hasn't registered listen() yet)
-                                                let info_state = app_handle.state::<Mutex<GatewayInfo>>();
-                                                info_state.lock().unwrap().ready_payload = Some(value.clone());
-                                                // Also emit event for listen()-based path
-                                                let _ = app_handle.emit("gateway-ready", value);
-                                            }
-                                        }
-                                    }
-                                    CommandEvent::Stderr(line) => {
-                                        eprintln!("[gateway] {}", String::from_utf8_lossy(&line));
-                                    }
-                                    CommandEvent::Terminated(status) => {
-                                        println!("[gateway] exited: {:?}", status);
-                                        break;
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        });
-                    }
-                    Err(e) => {
-                        eprintln!("[desktop] Failed to spawn gateway sidecar: {}", e);
-                    }
+                if let Err(message) = start_gateway(app.handle()) {
+                    show_startup_error(app.handle(), &message);
                 }
             } else {
-                println!("[desktop] Dev mode — gateway sidecar skipped. Run `pnpm dev:gateway` separately.");
+                println!("[desktop] Dev mode — gateway sidecar skipped (`pnpm dev:desktop` starts the dev servers).");
             }
 
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Hide to tray instead of quitting
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if cfg!(target_os = "linux") {
+                    // Tray icons are not shown on every Linux desktop: closing the window quits,
+                    // so the app can never be left running with no way back to it.
+                    kill_gateway(window.app_handle());
+                    return;
+                }
+                // macOS and Windows: hide to the tray instead of quitting
                 let _ = window.hide();
                 api.prevent_close();
             }
@@ -272,16 +344,10 @@ fn main() {
         .run(|app, event| {
             match event {
                 // Re-show window when Dock icon is clicked (macOS)
-                tauri::RunEvent::Reopen { .. } => {
-                    if let Some(w) = app.get_webview_window("main") {
-                        let _ = w.show();
-                        let _ = w.set_focus();
-                    }
-                }
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen { .. } => show_main_window(app),
                 // Kill sidecar when app is actually exiting
-                tauri::RunEvent::Exit => {
-                    kill_gateway(app);
-                }
+                tauri::RunEvent::Exit => kill_gateway(app),
                 _ => {}
             }
         });
