@@ -106,8 +106,12 @@ All of this was checked on 2026-11-07 against Claude Code **2.1.319**, using `cl
 ## `pixel-crew claude-attachable`
 
 ```bash
-pixel-crew claude-attachable [any claude flags]      # from source: pnpm --filter pixel-crew exec tsx src/index.ts claude-attachable
+pixel-crew claude-attachable [any claude flags]
+# from source, without the command on PATH:
+node apps/gateway/dist/index.js claude-attachable [any claude flags]
 ```
+
+`pixel-crew` is only on your `PATH` once Pixel Crew is installed from npm or linked by hand; see "The `pixel-crew` command from source" in the README.
 
 This starts an interactive `claude` with `--settings <tmp file>` containing `{"crossSessionInbound":"accept"}`, **for that session only**. The docs recommend this for unattended receivers. It is useful when you normally run with `--dangerously-skip-permissions`, because such sessions otherwise hold each live task for approval.
 

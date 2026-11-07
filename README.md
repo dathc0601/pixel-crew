@@ -84,6 +84,8 @@ Demo mode never starts an AI CLI and never spends tokens. It keeps its data in `
 
 Agents work in the folder you pick for the project. The gateway's default folder is the directory it was started in; the `WORKSPACE=/path/to/repo` environment variable changes it.
 
+**The `pixel-crew` command from source.** Until Pixel Crew is on npm, the `pixel-crew` command (needed for `pixel-crew claude-attachable`, see [docs/attach-sessions.md](docs/attach-sessions.md)) is not on your `PATH`. After `pnpm start` has built the gateway once, either run `node apps/gateway/dist/index.js <subcommand>` from the repo, or link the built file into a folder that is on your `PATH`, for example `ln -s "$PWD/apps/gateway/dist/index.js" "$(npm prefix -g)/bin/pixel-crew"` on macOS/Linux.
+
 **Desktop app**: unsigned installers for macOS, Windows and Linux are attached to each [release](https://github.com/dathc0601/pixel-crew/releases). See [docs/desktop.md](docs/desktop.md).
 
 **For development**: `pnpm dev` (gateway on :9099 + web dev server with hot reload) or `pnpm dev:demo`.
