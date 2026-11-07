@@ -47,7 +47,7 @@ import {
 
 /* ── Constants ──────────────────────────────────────────────────────────── */
 
-const MAX_SESSION_HISTORY = 30;
+export const MAX_SESSION_HISTORY = 30;
 const MAX_AGENT_FACTS = 50;
 const MAX_SHARED_ITEMS = 20;
 

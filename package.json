@@ -11,12 +11,10 @@
     "build:release": "pnpm --filter web build && pnpm --filter bit-office build",
     "publish:release": "pnpm run build:release && cd apps/gateway && npm publish",
     "lint": "pnpm -r lint",
-    "start:local": "bash scripts/start-local.sh",
     "dev:desktop": "pnpm --filter bit-office-desktop dev",
     "build:desktop": "bash scripts/install-desktop.sh",
-    "postinstall": "bash scripts/install-agents.sh || true",
-    "agents:install": "bash scripts/install-agents.sh",
-    "agents:update": "bash scripts/install-agents.sh --update"
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm -r --if-present test"
   },
   "devDependencies": {
     "typescript": "^5.7.0"

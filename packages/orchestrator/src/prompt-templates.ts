@@ -402,7 +402,7 @@ export class PromptEngine {
       console.warn(`[Prompts] Unknown template: ${templateName}`);
       return vars["prompt"] ?? "";
     }
-    const mergedVars = { soul: DEFAULT_SOUL, ...vars };
+    const mergedVars: Record<string, string | undefined> = { soul: DEFAULT_SOUL, ...vars };
     return template.replace(/\{\{(\w+)\}\}/g, (_, key) => mergedVars[key] ?? "");
   }
 }

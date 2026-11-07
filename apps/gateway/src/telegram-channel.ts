@@ -379,12 +379,10 @@ export const telegramChannel: Channel = {
         const files = r?.changedFiles?.length ? `\n\nFiles: ${r.changedFiles.length}` : "";
         const previewUrl = buildTunnelPreviewLink(r);
         const text = `Done: ${summary}${files}`;
-        const opts: TelegramBot.SendMessageOptions = {};
-        if (previewUrl) {
-          opts.reply_markup = {
-            inline_keyboard: [[{ text: "Preview", url: previewUrl }]],
-          };
-        }
+        const replyMarkup: TelegramBot.InlineKeyboardMarkup | undefined = previewUrl
+          ? { inline_keyboard: [[{ text: "Preview", url: previewUrl }]] }
+          : undefined;
+        const opts: { reply_markup?: TelegramBot.InlineKeyboardMarkup } = replyMarkup ? { reply_markup: replyMarkup } : {};
         const msgId = statusMessages.get(key);
 
         if (msgId) {

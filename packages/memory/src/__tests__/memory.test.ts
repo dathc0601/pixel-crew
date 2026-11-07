@@ -17,6 +17,7 @@ import {
   recordProjectCompletion,
   recordTechPreference,
   getMemoryStore,
+  MAX_SESSION_HISTORY,
 } from "../memory.js";
 import type { TaskCompletionData } from "../types.js";
 
@@ -61,9 +62,9 @@ SUMMARY: Redesigned MultiPaneView pagination bar with styled buttons`,
     assert.equal(history.history.length, 1);
   });
 
-  it("should maintain ring buffer of 10 sessions", () => {
+  it("should maintain ring buffer of MAX_SESSION_HISTORY sessions", () => {
     freshStorage();
-    for (let i = 0; i < 15; i++) {
+    for (let i = 0; i < MAX_SESSION_HISTORY + 5; i++) {
       commitSession({
         agentId: "alex-2",
         stdout: `SUMMARY: Task ${i + 1}\n`,
@@ -74,9 +75,10 @@ SUMMARY: Redesigned MultiPaneView pagination bar with styled buttons`,
     }
 
     const history = getSessionHistory("alex-2");
-    assert.equal(history.history.length, 10);
-    assert.ok(history.latest!.what.includes("Task 15"));
-    assert.ok(history.history[0].what.includes("Task 15"));
+    assert.equal(history.history.length, MAX_SESSION_HISTORY);
+    const last = `Task ${MAX_SESSION_HISTORY + 5}`;
+    assert.ok(history.latest!.what.includes(last));
+    assert.ok(history.history[0].what.includes(last));
   });
 });
 
