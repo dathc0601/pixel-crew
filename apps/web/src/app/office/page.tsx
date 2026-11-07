@@ -644,6 +644,8 @@ export default function OfficePage() {
     if (lead) {
       setSelectedAgent(lead.agentId);
       setChatOpen(true);
+      // After a reload the tab defaults to "agents" (solo agents), which hides the Lead
+      setExpandedSection("team");
     }
   }, [agents, selectedAgent]);
 
