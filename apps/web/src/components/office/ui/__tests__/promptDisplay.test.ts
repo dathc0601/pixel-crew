@@ -12,7 +12,7 @@ describe('describePrompt', () => {
     const raw = 'You are the Team Lead. You CANNOT write or fix code.\n\nOriginal user task: X\n\nTeam status:\n\n\nNew result from 2 team members (completed successfully):\n- Rex (completed successfully): Finished.\n\n- Mia (completed successfully): Done too.\n\nCRITICAL: Only ONE delegation per response.'
     const d = describePrompt(raw)
     assert.equal(d?.tag, 'results')
-    assert.equal(d?.text, 'From 2 team members: Rex (completed successfully): Finished. · Mia (completed successfully): Done too.')
+    assert.equal(d?.text, 'From 2 team members: Rex: Finished. · Mia: Done too.')
   })
 
   it('a single result keeps its summary', () => {

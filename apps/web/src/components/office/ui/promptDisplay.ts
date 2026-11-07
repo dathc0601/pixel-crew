@@ -23,7 +23,7 @@ function resultLines(block: string): string[] {
     .split("\n")
     .map((l) => l.trim())
     .filter((l) => l.startsWith("- "))
-    .map((l) => l.slice(2));
+    .map((l) => l.slice(2).replace(/^([^:(]+?) \([^)]*\):/, '$1:'));
   return lines.length > 0 ? lines : [block.trim()];
 }
 
