@@ -3,7 +3,7 @@
   "bootstrap-sha": "5b0246c396aed041c5262ab0132623bf2b8b067b",
   "include-component-in-tag": false,
   "bump-minor-pre-major": true,
-  "bump-patch-for-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": false,
   "pull-request-title-pattern": "chore: release ${version}",
   "changelog-sections": [
     { "type": "feat", "section": "Features" },
