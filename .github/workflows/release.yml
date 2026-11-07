@@ -6,10 +6,6 @@ name: Desktop builds
 on:
   push:
     tags: ["v*"]
-    # TEMPORARY (Phase 5 testing): workflow_dispatch only works once this file is on the
-    # default branch. Remove this before merging.
-    branches: [phase-5-cross-platform]
-    paths: [".github/workflows/release.yml", "apps/desktop/**"]
   workflow_dispatch:
 
 permissions:
