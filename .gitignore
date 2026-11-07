@@ -20,3 +20,11 @@ apps/desktop/src-tauri/target
 apps/desktop/src-tauri/sidecar
 CONVENTIONS.md
 .codex-agent
+
+# Dependencies and build outputs
+node_modules/
+/.next/
+apps/gateway/dist/
+apps/web/public/workbox-*.js
+apps/web/public/swe-worker-*.js
+*.tsbuildinfo
