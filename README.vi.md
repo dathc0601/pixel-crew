@@ -118,6 +118,8 @@ Các key khác trong `config.json`:
 - `"publicUrl"`: địa chỉ HTTPS đứng trước gateway, ví dụ Tailscale serve.
 - `"externalAgents": false`: ngừng dò tìm các phiên Claude mà bạn tự mở trong terminal.
 
+Các phiên Claude bạn tự mở hiện ra trong văn phòng dưới dạng nhân vật bên ngoài. Bấm vào một nhân vật rồi chọn **Join team** để biến nó thành developer mà Lead có thể giao task: việc chạy trong một bản fork của phiên đó (terminal của bạn không bị đụng tới), hoặc chạy trực tiếp trong terminal đó. Xem [docs/attach-sessions.md](docs/attach-sessions.md).
+
 Thư mục dữ liệu là `~/.pixel-crew/` (`~/.pixel-crew-dev/` khi chạy `pnpm dev`). `PIXEL_CREW_HOME` sẽ ghi đè đường dẫn này.
 
 ## Nền tảng hỗ trợ
@@ -195,7 +197,7 @@ Mọi issue và pull request đều được hoan nghênh. Hãy bắt đầu v�
 
 v1 (0.2.0) là văn phòng Boss → Lead → Dev dành cho **Claude Code**. Tiếp theo:
 
-1. **Hỗ trợ nhiều nhà cung cấp (Phase 2)**: một lớp `AgentDriver`, với ACP (qua [acpx](https://github.com/openclaw/acpx)) làm mặc định cho Codex, Gemini, Antigravity và các tool khác. Bản này cũng sẽ mang lại yêu cầu cấp quyền thật từ agent và trạng thái cho các phiên Claude bạn tự mở. Code upstream vẫn còn các adapter thử nghiệm cho Codex, Gemini, Copilot, Cursor, Aider, OpenCode, Pi và Sapling, nhưng chưa được test trong Pixel Crew.
+1. **Hỗ trợ nhiều nhà cung cấp (Phase 2)**: một lớp `AgentDriver`, với ACP (qua [acpx](https://github.com/openclaw/acpx)) làm mặc định cho Codex, Gemini, Antigravity và các tool khác. Bản này cũng sẽ mang lại yêu cầu cấp quyền thật từ agent. Việc gắn các phiên Claude bạn tự mở vào team (Phase 2a) đã có sẵn. Code upstream vẫn còn các adapter thử nghiệm cho Codex, Gemini, Copilot, Cursor, Aider, OpenCode, Pi và Sapling, nhưng chưa được test trong Pixel Crew.
 2. **Bản web demo tĩnh** trên GitHub Pages, chạy luồng kịch bản ngay trên trình duyệt, không cần cài đặt.
 3. **Không khí văn phòng sống động** (máy pha cà phê, ánh sáng cửa sổ theo ngày/đêm) mà không tốn CPU khi rảnh.
 4. **Phát hành lên npm**: `npx pixel-crew`.

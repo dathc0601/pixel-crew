@@ -58,7 +58,9 @@ Planned implementations:
 |---|---|---|
 | `LegacyCliDriver` | Today's spawn-per-task code, moved over unchanged | Every Phase 0/1 test must pass through it untouched (P2.1). It stays for CLIs without ACP and as a fallback. |
 | `AcpDriver` | Claude, Codex, Gemini, Antigravity, Copilot, Cursor, OpenCode, Qwen, Goose, … | Built on the `acpx/runtime` library export, not by shelling out per prompt. One named session per hired agent (`<office>-<agentId>`). ACP permission requests map to `APPROVAL_NEEDED`, which brings back real approvals in the UI (P2.2, P2.3). |
-| `ClaudeHooksObserver` | Claude Code sessions you started yourself | A loopback `/hooks/claude` endpoint, with a per-install secret, replaces the `ps` CPU heuristic for status (P2.4). It observes only: Pixel Crew never types into a human's terminal session. |
+| `ClaudeHooksObserver` | Claude Code sessions you started yourself | A loopback `/hooks/claude` endpoint, with a per-install secret, replaces the `ps` CPU heuristic for status (P2.4). It observes only. |
+
+**Already built (Phase 2a, Claude only):** a small first cut of this layer in `packages/orchestrator/src/drivers/` (`driver.ts`, `claude-fork.ts`, `claude-live.ts`). The owner can attach a Claude session they started themselves to the team (owner decision, 2026-11-07). Work then runs in a fork of that session by default, or, on the owner's explicit choice, through the session's documented cross-session inbox. See [attach-sessions.md](attach-sessions.md).
 
 A **driver profile** is then mostly data:
 - which driver to use;
@@ -72,7 +74,7 @@ Adding a vendor becomes: write the profile, add a fake-server test, and do one m
 
 - **acpx is pre-1.0** and needs Node ≥ 22.13. Pin its version and keep every acpx import inside `drivers/acp.ts`.
 - **Antigravity's ACP adapter** is unverified. Test it before listing it as supported.
-- **Visitors vs hired agents** (P2.5): only hired agents, and ACP sessions reachable through acpx's shared runtime, can be given work. Discovered sessions stay view-only.
+- **Visitors vs hired agents** (P2.5): hired agents, ACP sessions reachable through acpx's shared runtime, and Claude sessions the owner attached (Phase 2a) can be given work. Other discovered sessions stay view-only.
 - **Choreography stays cosmetic.** A driver emits events. The Dispatcher and the `HANDOFF` timing do not change per vendor.
 - **Team presets** (P2.6): the Lead is the strongest configured model (Claude by default), and developers round-robin across the vendors you have installed.
 

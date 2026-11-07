@@ -79,6 +79,12 @@ TASK_DONE includes structured result (changedFiles, diffStat, testResult).
 - No telemetry: no analytics, beacons, update checks or third-party requests.
 - v1 is Claude Code only; multi-vendor (Phase 2) is deferred.
 
+## Attach Claude sessions (Phase 2a)
+- Owner-only `ATTACH_EXTERNAL {agentId, role?: "dev", mode?: "fork"|"live"}` / `DETACH_AGENT`, reply `ATTACH_RESULT`; `AGENT_CREATED` carries `attached`, `attachMode`, `attachNote`, `attachOptions` (externals). Docs and research: `docs/attach-sessions.md`.
+- Drivers: `packages/orchestrator/src/drivers/` (`claude-fork.ts` = `claude -p --resume <id> --fork-session` in the session's cwd, team project via `--add-dir`; `claude-live.ts` = cross-session inbox socket + transcript as a virtual run). Attached sessions: no worktree, no own resume, `worker-attached` prompt.
+- Gateway: `apps/gateway/src/attach/` (`attach-manager.ts`, `attach-commands.ts`, `claude-sessions.ts` reads `<CLAUDE_CONFIG_DIR|~/.claude>/sessions/<pid>.json` read-only, `demo-external.ts`, `claude-attachable.ts` launcher); state in `data/instances/<id>/attachments.json`. Never write to the user's Claude config.
+- UI: `components/office/attach/`, `store/attach-store.ts`. Fakes: `packages/orchestrator/fake-agent/fake-claude-session.mjs` (`startFakeClaudeSession`); demo mode runs one.
+
 ## Team Execution Flow
 Phases: CREATE → DESIGN → EXECUTE → COMPLETE → (loop or END).
 Execute: Leader → Dev (build+self-fix) → Reviewer (VERDICT) → Fix loop (max 3 reviews).

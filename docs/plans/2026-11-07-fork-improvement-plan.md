@@ -1,7 +1,7 @@
 # Fork Improvement Plan: from "Open Office" to a pixel-art AI mini company
 
 Date: 2026-11-07
-Status: owner decisions recorded (§0). Phase 0 merged (2026-11-07). Phase 1 (daemon and UI) implemented on branch `phase-1-boss-flow` (2026-11-07), with a token-free demo mode (`pnpm dev:demo`). Phase 3 (office layout, rooms, art) implemented on branch `phase-3-office-art` (2026-11-07). Phase 4 (performance) implemented on branch `phase-4-performance` (2026-11-07); measurements in `docs/perf/baseline-2026-11-07.md`. Phase 5 (cross-platform builds, mobile remote, pairing v2) implemented on branch `phase-5-cross-platform` (2026-11-07); see `docs/desktop.md` and `docs/mobile.md`. Phase 6 (community polish: docs, releases, extension points, `pnpm demo`) implemented on branch `phase-6-community` (2026-11-07): **v1 complete at 0.2.0**, Phase 2 (multi-vendor) deferred; summary at the top of §6 Phase 6. See the status lines under each item.
+Status: owner decisions recorded (§0). Phase 0 merged (2026-11-07). Phase 1 (daemon and UI) implemented on branch `phase-1-boss-flow` (2026-11-07), with a token-free demo mode (`pnpm dev:demo`). Phase 3 (office layout, rooms, art) implemented on branch `phase-3-office-art` (2026-11-07). Phase 4 (performance) implemented on branch `phase-4-performance` (2026-11-07); measurements in `docs/perf/baseline-2026-11-07.md`. Phase 5 (cross-platform builds, mobile remote, pairing v2) implemented on branch `phase-5-cross-platform` (2026-11-07); see `docs/desktop.md` and `docs/mobile.md`. Phase 6 (community polish: docs, releases, extension points, `pnpm demo`) implemented on branch `phase-6-community` (2026-11-07): **v1 complete at 0.2.0**, Phase 2 (multi-vendor) deferred; summary at the top of §6 Phase 6. Phase 2a (attach the owner's own Claude Code sessions to the team: fork mode by default, live mode via the cross-session inbox) implemented on branch `phase-2a-attach-claude` (2026-11-07); see `docs/attach-sessions.md`. See the status lines under each item.
 Scope: `~/WebstormProjects/OpenOffice`. `origin` is `github.com/dathc0601/pixel-crew` (renamed from OpenOffice on 2026-11-07); `upstream` is `github.com/longyangxi/OpenOffice` (formerly "bit-office", MIT).
 
 Legend used throughout:
@@ -432,11 +432,49 @@ Each task lists its goal, the files involved, the approach, acceptance criteria,
 - **Hired** agents are spawned and owned by the daemon. They are assignable and sit in the Dev room.
 - **Visitors** are attached or discovered sessions. They are view-only by default, sit in a "co-working" corner, and get a different label color.
 - A visitor becomes **assignable** only if it is an ACP session reachable through acpx's shared runtime (`createSharedAcpRuntime()` [V, README]). Never inject prompts into a human's interactive terminal session.
+- **Update (Phase 2a, owner decision 2026-11-07):** Claude sessions the owner attaches with Join team are assignable too: by default through a fork (the terminal is untouched), or in live mode through the session's own cross-session inbox, when the owner picks it.
 - *Acceptance:* The UI clearly distinguishes the three kinds, and assigning to a non-assignable visitor is impossible.
 
 **P2.6 Vendor-aware team presets (S).** In presets (`packages/shared/src/presets.ts`): Lead = the strongest configured model (default Claude), devs round-robin across the detected vendors, and the per-agent model override (upstream PRs #17/#18 are a starting point). Show estimated cost per vendor in the hire dialog.
 
 **P2.7 Process discovery abstraction (S–M).** Put `process-scanner.ts` behind a platform interface: `ps` on POSIX, PowerShell `Get-CimInstance Win32_Process` on Windows. Raise the interval to 15–30 s when hooks or ACP cover the same agents, and stop the scanner entirely when the "show external agents" setting is off.
+
+### Phase 2a — Attach Claude sessions (Claude-only slice of Phase 2)
+
+**Status: DONE on branch `phase-2a-attach-claude` (2026-11-07), fake-tested; the owner's real-Claude run is pending** (script in `docs/attach-sessions.md`, "Manual test with a real session").
+- **Owner request:** click an external Claude character → **Join team** (as a dev) → the Lead walks over and hands it tasks like any dev; **Leave team** detaches it. This overrides P2.5's "never inject prompts into a human's terminal session" *only* for the live mode the owner explicitly picks. Fork mode, the default, never touches the terminal.
+- **Mechanism research** (CLI 2.1.319, docs, binary strings; no real session started):
+  - **Fork mode (default):** `claude -p --resume <id> --fork-session --output-format stream-json` [V].
+  - **Live mode (opt-in):** the documented cross-session inbox socket (2.1.224+) [V]. Its message line format [U] and the session registry `~/.claude/sessions/<pid>.json` [U] are not documented.
+  - **Rejected:**
+    - resume without fork, because it interleaves transcripts [V];
+    - Channels, because they need a launch flag [V];
+    - Remote Control, because it has no local API [V];
+    - hooks, because they cannot inject a prompt [V];
+    - tmux, as brittle and superseded.
+
+  Full table in `docs/attach-sessions.md`.
+- **Built:**
+  - `ATTACH_EXTERNAL` / `DETACH_AGENT` (owner-only) and `ATTACH_RESULT`; attach fields on `AGENT_CREATED`.
+  - A small `AgentDriver` in `packages/orchestrator/src/drivers/`, keeping the §7.5 direction: AgentSession can run through a driver; fork and live drivers.
+  - The gateway `AttachManager`:
+    - same agent id, joins as a team dev;
+    - liveness and owner-busy checks every 3 s;
+    - a gone session detaches and its item is re-queued;
+    - restored on restart only while the same session runs.
+  - Attached sessions get no worktree, use the persona-free `worker-attached` prompt, and fork permissions follow `office.permissionMode` (auto).
+  - UI: Join/Leave with a mode picker and a one-line note, a purple tag with a chain-link badge, and a walk to a dev desk.
+  - The `pixel-crew claude-attachable` launcher: a per-session `--settings` with `crossSessionInbound: "accept"`; no user config is changed.
+  - Demo mode simulates one external session.
+- **Tests:**
+  - orchestrator (fork argv, dispatch, owner busy, removal and session-death re-queue, live inbox);
+  - gateway (attach, owner-only, detach, death, restart persistence, launcher);
+  - e2e in demo mode, fork and live;
+  - the web store.
+- **Open:**
+  - the owner's real-Claude manual run (fork + live + bypass session);
+  - Windows live mode (needs the inbox auth token) [U];
+  - a hooks-based completion signal (`Stop`) as an opt-in alternative to transcript parsing.
 
 ### Phase 3 — Office layout, rooms and art (about 2–3 weeks, parallelizable)
 

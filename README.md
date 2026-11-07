@@ -118,6 +118,8 @@ Other keys in `config.json`:
 - `"publicUrl"`: the HTTPS address in front of the gateway, e.g. Tailscale serve.
 - `"externalAgents": false`: stop looking for Claude sessions you started yourself in a terminal.
 
+Claude sessions you started yourself show up as external characters. Click one and press **Join team** to make it a developer the Lead hands tasks to: work runs in a fork of the session (your terminal is untouched), or live in that terminal. See [docs/attach-sessions.md](docs/attach-sessions.md).
+
 The data folder is `~/.pixel-crew/` (`~/.pixel-crew-dev/` for `pnpm dev`). `PIXEL_CREW_HOME` overrides it.
 
 ## Platforms
@@ -195,7 +197,7 @@ Issues and pull requests are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.
 
 v1 (0.2.0) is the Boss → Lead → Dev office for **Claude Code**. Next:
 
-1. **Multi-vendor support (Phase 2)**: an `AgentDriver` layer, with ACP (via [acpx](https://github.com/openclaw/acpx)) as the default for Codex, Gemini, Antigravity and others. It will also bring real permission requests from agents and status for Claude sessions you started yourself. The upstream code still has experimental adapters for Codex, Gemini, Copilot, Cursor, Aider, OpenCode, Pi and Sapling, but they are untested in Pixel Crew.
+1. **Multi-vendor support (Phase 2)**: an `AgentDriver` layer, with ACP (via [acpx](https://github.com/openclaw/acpx)) as the default for Codex, Gemini, Antigravity and others. It will also bring real permission requests from agents. Attaching your own Claude sessions to the team (Phase 2a) is already in. The upstream code still has experimental adapters for Codex, Gemini, Copilot, Cursor, Aider, OpenCode, Pi and Sapling, but they are untested in Pixel Crew.
 2. **A static web demo** on GitHub Pages that runs the scripted flow in the browser, with no install.
 3. **Ambient office life** (coffee machine, day/night window light) that costs no CPU while idle.
 4. **npm release**: `npx pixel-crew`.
