@@ -31,6 +31,7 @@ import { APP_VERSION, APP_BUILD_TIME } from "@/lib/appMeta";
 
 // Extracted components — regular imports for hooks and inline-rendered components
 import { useConfirm } from "@/components/office/ui/useConfirm";
+import { HIRE_TEAM_EVENT } from "@/store/connection-store";
 
 // Dynamic imports for extracted components
 import dynamic from "next/dynamic";
@@ -64,6 +65,7 @@ const CommandPalette = dynamic(() => import("@/components/office/ui/CommandPalet
 const ProjectBar = dynamic(() => import("@/components/office/ui/ProjectBar"), { ssr: false });
 const NewProjectModal = dynamic(() => import("@/components/office/ui/NewProjectModal"), { ssr: false });
 const AblyLoader = dynamic(() => import("@/hooks/useAblyLoader"), { ssr: false });
+const GatewayStatus = dynamic(() => import("@/components/office/ui/GatewayStatus"), { ssr: false });
 
 /** Sentinel that triggers loadMore when scrolled into view */
 function LoadMoreSentinel({ onLoadMore }: { onLoadMore: () => void }) {
@@ -204,6 +206,12 @@ export default function OfficePage() {
   const { confirm, modal: confirmModal } = useConfirm();
   const [showHireModal, setShowHireModal] = useState(false);
   const [showHireTeamModal, setShowHireTeamModal] = useState(false);
+  // "Hire a team" from a refused Join team notice or the attach panel
+  useEffect(() => {
+    const open = () => setShowHireTeamModal(true);
+    window.addEventListener(HIRE_TEAM_EVENT, open);
+    return () => window.removeEventListener(HIRE_TEAM_EVENT, open);
+  }, []);
   const [showCreateAgent, setShowCreateAgent] = useState(false);
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
   const [editingAgent, setEditingAgent] = useState<AgentDefinition | null>(null);
@@ -709,7 +717,8 @@ export default function OfficePage() {
   }, [agents]); // addAgentToProject, getActiveProject are stable refs from getState()
 
   const handleCreateTeam = useCallback((leadId: string, memberIds: string[], backends: Record<string, string>, workDir?: string) => {
-    sendCommand({ type: "CREATE_TEAM", leadId, memberIds, backends, workDir });
+    // Offline: keep the dialog open; sendCommand already showed "Not sent"
+    if (!sendCommand({ type: "CREATE_TEAM", leadId, memberIds, backends, workDir })) return;
     setShowHireTeamModal(false);
     setExpandedSection("team");
     setSelectedAgent(null);
@@ -731,11 +740,21 @@ export default function OfficePage() {
   const handleFire = useCallback(async (agentId: string) => {
     const agent = agents.get(agentId);
     if (agent?.isExternal) {
-      if (!await confirm(`Kill external process ${agent.name}? (PID ${agent.pid})`)) return;
-      sendCommand({ type: "KILL_EXTERNAL", agentId });
+      const ok = await confirm(`Kill ${agent.name}? This closes your terminal session.`, {
+        title: "Kill external process",
+        details: [
+          `PID ${agent.pid ?? "unknown"}`,
+          `Folder: ${agent.cwd ?? agent.workDir ?? "unknown"}`,
+          "The process gets SIGKILL: unsaved work in that session is lost.",
+        ],
+        confirmLabel: "Kill process",
+        cancelLabel: "Cancel",
+      });
+      if (!ok) return;
+      if (!sendCommand({ type: "KILL_EXTERNAL", agentId })) return;
     } else {
       if (!await confirm(`Fire ${agent?.name ?? agentId}?`)) return;
-      sendCommand({ type: "FIRE_AGENT", agentId });
+      if (!sendCommand({ type: "FIRE_AGENT", agentId })) return;
     }
     if (selectedAgent === agentId) {
       setSelectedAgent(null);
@@ -1275,6 +1294,7 @@ export default function OfficePage() {
   return (
     <div style={{ height: "100vh", width: "100vw", position: "relative", overflow: "hidden", display: "flex", backgroundColor: TERM_BG }}>
       <AblyLoader />
+      <GatewayStatus />
       <BossFlowLayer adapter={sceneAdapter} isOwner={isOwner} />
       {/* Game Scene — fills remaining space after sidebar, centered */}
       {/* Phones have no console sidebar, so they always get the office view (P5.3) */}

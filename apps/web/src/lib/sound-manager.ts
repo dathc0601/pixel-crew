@@ -12,15 +12,42 @@ type SoundType =
   | "delegation";
 
 let ctx: AudioContext | null = null;
+let unlocked = false;
+let unlockListening = false;
 
-function getCtx(): AudioContext {
-  if (!ctx || ctx.state === "closed") {
-    ctx = new AudioContext();
+// Autoplay policy: an AudioContext made or resumed before a user gesture logs
+// "The AudioContext was not allowed to start". So none exists until the first
+// pointerdown / keydown; sounds requested before that are dropped silently.
+const UNLOCK_EVENTS = ["pointerdown", "keydown"] as const;
+
+function unlock() {
+  unlocked = true;
+  for (const ev of UNLOCK_EVENTS) window.removeEventListener(ev, unlock, true);
+  try {
+    if (!ctx || ctx.state === "closed") ctx = new AudioContext();
+    if (ctx.state === "suspended") ctx.resume().catch(() => {});
+  } catch {
+    // No Web Audio: sounds stay off
   }
-  // Resume suspended context (browser autoplay policy)
-  if (ctx.state === "suspended") {
-    ctx.resume().catch(() => {});
+}
+
+function listenForUnlock() {
+  if (unlockListening || typeof window === "undefined") return;
+  unlockListening = true;
+  // A gesture already happened in this page (e.g. sounds turned on with a click)
+  if (navigator.userActivation?.hasBeenActive) {
+    unlock();
+    return;
   }
+  for (const ev of UNLOCK_EVENTS) window.addEventListener(ev, unlock, { capture: true, passive: true });
+}
+
+if (typeof window !== "undefined") listenForUnlock();
+
+function getCtx(): AudioContext | null {
+  if (!unlocked) return null;
+  if (!ctx || ctx.state === "closed") ctx = new AudioContext();
+  if (ctx.state === "suspended") ctx.resume().catch(() => {});
   return ctx;
 }
 
@@ -104,12 +131,13 @@ const SOUNDS: Record<SoundType, (ac: AudioContext) => void> = {
 
 /**
  * Play a synthesized sound effect.
- * Safe to call in SSR (no-ops gracefully).
+ * Safe to call in SSR (no-ops gracefully). Before the first user gesture it does nothing.
  */
 export function playSound(type: SoundType): void {
   if (typeof window === "undefined") return;
   try {
     const ac = getCtx();
+    if (!ac) return;
     SOUNDS[type](ac);
   } catch {
     // Silently fail — sound is non-critical

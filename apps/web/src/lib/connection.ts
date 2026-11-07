@@ -1,5 +1,6 @@
 import type { ConnectionInfo } from "./storage";
-import { connectToWs, sendWsCommand, disconnectWs } from "./ws-client";
+import { connectToWs, sendWsCommand, disconnectWs, retryWsNow } from "./ws-client";
+import { isQuietCommand, OFFLINE_NOT_SENT, pushNotice } from "@/store/connection-store";
 
 // Ably transport is registered lazily at runtime (see useAblyLoader hook)
 // to prevent SSR from pulling in ably-node.js and its unresolvable dependencies.
@@ -41,16 +42,31 @@ export function connect(info: ConnectionInfo) {
   };
 }
 
-export function sendCommand(command: Record<string, unknown>) {
-  if (activeMode === "ws") {
-    sendWsCommand(command);
-  } else if (activeMode === "ably") {
-    ablyTransport?.send(command);
+/**
+ * Sends a command to the gateway. Returns false when it could not be sent; the user then
+ * sees "Not sent: the gateway is offline". Nothing is queued, so a click never replays
+ * later (no double CREATE_TEAM, no late spawn or kill).
+ */
+export function sendCommand(command: Record<string, unknown>): boolean {
+  let sent = false;
+  if (activeMode === "ably") {
+    try {
+      ablyTransport?.send(command);
+      sent = !!ablyTransport;
+    } catch {
+      sent = false;
+    }
   } else {
-    // Fallback: try WS anyway (ws-client checks readyState internally)
-    console.warn("[Connection] No active transport, attempting WS fallback");
-    sendWsCommand(command);
+    // "ws", or no transport yet: ws-client checks readyState itself
+    sent = sendWsCommand(command);
   }
+  if (!sent && !isQuietCommand(command.type)) pushNotice(OFFLINE_NOT_SENT);
+  return sent;
+}
+
+/** "Retry now" in the offline banner. */
+export function retryConnection() {
+  if (activeMode === "ws") retryWsNow();
 }
 
 export function disconnect() {

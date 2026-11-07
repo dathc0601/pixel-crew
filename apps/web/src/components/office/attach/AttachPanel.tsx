@@ -7,7 +7,8 @@
 import { useState } from "react";
 import type { AttachMode } from "@pixel-crew/shared";
 import { useOfficeStore } from "@/store/office-store";
-import { requestAttach, requestDetach, useAttachStore } from "@/store/attach-store";
+import { needsTeam, requestAttach, requestDetach, useAttachStore } from "@/store/attach-store";
+import { requestHireTeam } from "@/store/connection-store";
 import TermButton from "../ui/primitives/TermButton";
 import { TERM_DIM, TERM_SEM_PURPLE, TERM_SEM_RED, TERM_TEXT } from "../ui/termTheme";
 import { ATTACH_MODE_LABEL } from "./attachLabels";
@@ -74,7 +75,14 @@ export default function AttachPanel({ agentId, isOwner }: { agentId: string; isO
         )}
       </div>
       <div style={{ color: TERM_TEXT, opacity: 0.75 }}>{note}</div>
-      {error && <div style={{ color: TERM_SEM_RED }}>{error}</div>}
+      {error && (
+        <div className="flex items-center gap-2 flex-wrap" role="alert" data-testid="attach-error">
+          <span style={{ color: TERM_SEM_RED }}>{error}</span>
+          {isOwner && needsTeam(error) && (
+            <TermButton size="sm" variant="primary" onClick={requestHireTeam}>Hire a team</TermButton>
+          )}
+        </div>
+      )}
     </div>
   );
 }
