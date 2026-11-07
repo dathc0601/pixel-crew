@@ -42,7 +42,8 @@ function sameKey(a: readonly unknown[], b: readonly unknown[]): boolean {
   return true
 }
 
-const overlaps = (a: Box, b: Box) => a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1
+/** Boxes touch, with 1 CSS px of slack: at fractional positions an edge can bleed into the next device pixel */
+const overlaps = (a: Box, b: Box) => a.x0 - 1 < b.x1 && b.x0 < a.x1 + 1 && a.y0 - 1 < b.y1 && b.y0 < a.y1 + 1
 
 function drawSorted(ctx: CanvasRenderingContext2D, items: Array<{ d: ZDrawable; i: number }>): void {
   items.sort((a, b) => (a.d.zY - b.d.zY) || (a.i - b.i))
@@ -69,6 +70,9 @@ export function renderWithStaticLayer(
   const m = ctx.getTransform()
   const dpr = m.a
   if (m.b !== 0 || m.c !== 0 || m.d !== dpr || m.e !== 0 || m.f !== 0 || dpr <= 0) return false
+  // Fractional DPRs (e.g. 2.625 phones) put tile and sprite edges between device pixels, and
+  // a partial redraw cannot reproduce those anti-aliased seams exactly: draw in full there
+  if (!Number.isInteger(dpr)) return false
   if (dynamic.some((d) => !d.box)) return false
   const devW = ctx.canvas.width
   const devH = ctx.canvas.height
@@ -109,10 +113,13 @@ export function renderWithStaticLayer(
     if (x1 <= x0 || y1 <= y0) continue
     const r = { x0: x0 / dpr, y0: y0 / dpr, x1: x1 / dpr, y1: y1 / dpr }
     ctx.save()
+    // Clip and clear in device pixels (identity transform): exact even at fractional DPRs
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
     ctx.beginPath()
-    ctx.rect(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0)
+    ctx.rect(x0, y0, x1 - x0, y1 - y0)
     ctx.clip()
-    ctx.clearRect(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0)
+    ctx.clearRect(x0, y0, x1 - x0, y1 - y0)
+    ctx.setTransform(m)
     ctx.imageSmoothingEnabled = false
     paintFloor(ctx, r)
     const items: Array<{ d: ZDrawable; i: number }> = []
