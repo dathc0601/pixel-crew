@@ -12,7 +12,7 @@ The office view uses a pluggable `SceneAdapter` interface. You can swap the pixe
 ```typescript
 // scene/MySceneAdapter.ts
 import type { SceneAdapter, AgentInfo, BubbleType } from "./SceneAdapter";
-import type { AgentStatus } from "@office/shared";
+import type { AgentStatus } from "@pixel-crew/shared";
 
 export class MySceneAdapter implements SceneAdapter {
   addAgent(agentId: string, info: AgentInfo) {

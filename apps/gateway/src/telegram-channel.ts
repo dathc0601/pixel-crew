@@ -1,8 +1,8 @@
 import TelegramBot from "node-telegram-bot-api";
 import { config } from "./config.js";
 import { nanoid } from "nanoid";
-import { DEFAULT_AGENT_DEFS, type AgentDefinition } from "@office/shared";
-import type { GatewayEvent, Command } from "@office/shared";
+import { DEFAULT_AGENT_DEFS, type AgentDefinition } from "@pixel-crew/shared";
+import type { GatewayEvent, Command } from "@pixel-crew/shared";
 import type { Channel, CommandMeta } from "./transport.js";
 
 // ---------------------------------------------------------------------------
@@ -264,7 +264,7 @@ export const telegramChannel: Channel = {
         }
         bot!.sendMessage(
           msg.chat.id,
-          `Welcome to Bit Office!\n\nAvailable agents:\n${lines.join("\n")}\n\nTap a command to start a conversation, then send messages directly.`,
+          `Welcome to Pixel Crew!\n\nAvailable agents:\n${lines.join("\n")}\n\nTap a command to start a conversation, then send messages directly.`,
         );
         return;
       }

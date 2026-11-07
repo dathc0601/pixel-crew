@@ -1,9 +1,9 @@
-# Open Office Memory Redesign
+# Pixel Crew Memory Design
 
 > **Author**: Alex 3 | **Date**: 2026-03-18
 > **Status**: Implemented and in active use — `packages/memory/`
 > **Inspired by**: [Mem0](https://github.com/mem0ai/mem0) (fact extraction + dedup), [OpenViking](https://github.com/volcengine/OpenViking) (L0/L1/L2 layered loading)
-> **Package**: `@bit-office/memory` — implemented in `packages/memory/src/` with dedicated unit test coverage in `src/__tests__/`
+> **Package**: `@pixel-crew/memory` — implemented in `packages/memory/src/` with dedicated unit test coverage in `src/__tests__/`
 
 ---
 
@@ -26,7 +26,7 @@ Review patterns, tech preferences, and project ratings also persist (via the orc
 
 ### Current System Analysis
 
-Open Office currently has **two disconnected memory mechanisms**:
+Pixel Crew currently has **two disconnected memory mechanisms**:
 
 #### A. Recovery Context (`agent-session.ts`)
 ```typescript
@@ -115,7 +115,7 @@ Inspired by Mem0's tiered memory + OpenViking's L0/L1/L2 loading:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Open Office Memory                        │
+│                    Pixel Crew Memory                        │
 ├─────────────┬──────────────┬──────────────┬─────────────────┤
 │   Layer 0   │   Layer 1    │   Layer 2    │    Layer 3      │
 │  EPHEMERAL  │   SESSION    │    AGENT     │    SHARED       │
@@ -174,7 +174,7 @@ Inspired by Mem0's tiered memory + OpenViking's L0/L1/L2 loading:
 ### 3.3 Storage Layout
 
 ```
-~/.bit-office/memory/
+~/.pixel-crew/memory/
 ├── memory.json              # Legacy project-level memory
 ├── sessions/
 │   └── {agentId}.json       # L1: latest + 30-item history ring buffer
@@ -575,7 +575,7 @@ Alex 2 after recovery: "I was redesigning the pagination bar. I committed ad8ed5
 - **Optional LLM extraction**: Use a small local model (Ollama) to extract richer facts at session end
 - **Fact decay**: Auto-reduce `reinforceCount` over time for stale facts
 - **Semantic search**: If fact count grows large (>200), add simple TF-IDF for retrieval
-- **Memory dashboard**: UI in Open Office web app to inspect/edit/delete agent memories
+- **Memory dashboard**: UI in Pixel Crew web app to inspect/edit/delete agent memories
 - **Export/import**: Portable memory between machines (JSON export)
 
 ---

@@ -1,10 +1,10 @@
 {
-  "name": "bit-office",
+  "name": "pixel-crew",
   "version": "1.2.5",
-  "description": "Control AI agents from your phone \u2014 pixel office UI + real-time gateway",
+  "description": "Pixel Crew: run a small pixel-art company of AI coding agents from your browser or phone",
   "type": "module",
   "bin": {
-    "bit-office": "./dist/index.js"
+    "pixel-crew": "./dist/index.js"
   },
   "files": [
     "dist"
@@ -13,7 +13,8 @@
     "dev": "NODE_ENV=development WS_PORT=9099 tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "build": "tsc --noEmit && tsup && rm -rf dist/web && cp -r ../web/out dist/web",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test --test-concurrency=1 \"src/__tests__/*.test.ts\""
   },
   "dependencies": {
     "ably": "^2.6.0",
@@ -23,8 +24,8 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@office/shared": "workspace:*",
-    "@bit-office/orchestrator": "workspace:*",
+    "@pixel-crew/shared": "workspace:*",
+    "@pixel-crew/orchestrator": "workspace:*",
     "@types/node": "^22.0.0",
     "@types/node-telegram-bot-api": "^0.64.13",
     "@types/ws": "^8.5.0",
@@ -36,7 +37,14 @@
     "ai",
     "agent",
     "office",
+    "pixel-art",
+    "claude-code",
     "gateway"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dathc0601/pixel-crew.git"
+  },
+  "homepage": "https://github.com/dathc0601/pixel-crew"
 }

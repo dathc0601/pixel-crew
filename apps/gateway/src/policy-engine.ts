@@ -1,4 +1,4 @@
-import type { RiskLevel } from "@office/shared";
+import type { RiskLevel } from "@pixel-crew/shared";
 
 interface PolicyCheck {
   needsApproval: boolean;

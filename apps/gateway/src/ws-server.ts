@@ -1,9 +1,9 @@
 import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from "http";
 import { WebSocketServer, WebSocket } from "ws";
-import { CommandSchema } from "@office/shared";
-import type { GatewayEvent, Command, UserRole } from "@office/shared";
+import { CommandSchema } from "@pixel-crew/shared";
+import type { GatewayEvent, Command, UserRole } from "@pixel-crew/shared";
 import { config } from "./config.js";
-import { previewServer } from "@bit-office/orchestrator";
+import { previewServer } from "@pixel-crew/orchestrator";
 import { networkInterfaces, homedir } from "os";
 import { readFile, stat } from "fs/promises";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";

@@ -28,7 +28,7 @@ else
   sed -i "s/\"version\": \"[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\"/\"version\": \"$NEW_VER\"/" package.json
 fi
 echo "📦 Building $APP_NAME v$NEW_VER..."
-pnpm --filter bit-office-desktop build
+pnpm --filter pixel-crew-desktop build
 
 BUNDLE_DIR="apps/desktop/src-tauri/target/release/bundle/macos"
 APP_PATH="$BUNDLE_DIR/$APP_NAME.app"
@@ -48,7 +48,7 @@ for old_app in "$BUNDLE_DIR"/*.app; do
 done
 
 # Also check known legacy names
-LEGACY_NAMES=("Bit Office")
+LEGACY_NAMES=("Bit Office" "Open Office")
 for legacy in "${LEGACY_NAMES[@]}"; do
   if [ "$legacy" != "$APP_NAME" ] && [ -d "/Applications/$legacy.app" ]; then
     echo "🧹 Removing legacy app: /Applications/$legacy.app"

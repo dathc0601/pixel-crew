@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { useOfficeStore, type ProjectSummary } from "@/store/office-store";
 import { sendCommand } from "@/lib/connection";
-import type { GatewayEvent } from "@office/shared";
+import type { GatewayEvent } from "@pixel-crew/shared";
 import { cn } from "@/lib/utils";
 import TermModal from "./primitives/TermModal";
 import TermButton from "./primitives/TermButton";

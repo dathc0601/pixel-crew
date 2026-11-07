@@ -1,4 +1,4 @@
-import type { GatewayEvent, Command, UserRole } from "@office/shared";
+import type { GatewayEvent, Command, UserRole } from "@pixel-crew/shared";
 
 export interface CommandMeta {
   role: UserRole;

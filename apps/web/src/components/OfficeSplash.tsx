@@ -60,7 +60,7 @@ interface RainDrop {
 const BOOT_LINES = [
   { text: "> SYSTEM INIT...", color: "#22c55e", delay: 0 },
   { text: "> LOADING NEURAL CORE", color: "#22c55e", delay: 600 },
-  { text: "> OPEN OFFICE ENGINE V1.0", color: "#818cf8", delay: 1200 },
+  { text: "> PIXEL CREW ENGINE V1.0", color: "#818cf8", delay: 1200 },
   { text: "> MULTI-AGENT SOFTWARE DELIVERY", color: "#a1a1aa", delay: 1600 },
   { text: "> OFFICE MODE READY", color: "#f97316", delay: 2000 },
 ];

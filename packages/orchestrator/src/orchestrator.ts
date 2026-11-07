@@ -115,7 +115,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEventMap> {
       ?? this.backends.get(this.defaultBackendId)!;
 
     // Inject memory context for dev workers and leaders (not reviewers)
-    // Pass agentId so @bit-office/memory can include per-agent L2 facts + L3 shared knowledge
+    // Pass agentId so @pixel-crew/memory can include per-agent L2 facts + L3 shared knowledge
     const roleLower = opts.role.toLowerCase();
     const isReviewer = roleLower.includes("review");
     const memoryContext = !isReviewer ? getMemoryContext(opts.agentId) : "";
@@ -268,7 +268,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEventMap> {
     // Worktree isolation: create a branch for each non-leader, non-reviewer agent.
     // When worktree is disabled, agents work directly in the designated directory on the current branch.
     // NOTE: Claude Code's native --worktree flag is incompatible with -p and --resume
-    // (causes exit code 1). All backends use managed worktrees (~/.open-office[-dev]/worktrees/) instead.
+    // (causes exit code 1). All backends use managed worktrees (~/.pixel-crew[-dev]/worktrees/) instead.
     this.setupWorktreeForAgent(agentId, taskId, repoPath ?? session.workspaceDir);
 
     session.runTask(taskId, prompt, repoPath, teamContext, true /* isUserInitiated */, opts?.phaseOverride);
@@ -322,14 +322,14 @@ export class Orchestrator extends EventEmitter<OrchestratorEventMap> {
       if (!initGitRepo(base)) return;
     }
 
-    const instanceDir = process.env.BIT_OFFICE_INSTANCE_DIR;
+    const instanceDir = process.env.PIXEL_CREW_INSTANCE_DIR;
     const owner = instanceDir
       ? {
-        gatewayId: process.env.BIT_OFFICE_GATEWAY_ID ?? "unknown",
-        machineId: process.env.BIT_OFFICE_MACHINE_ID ?? "unknown",
+        gatewayId: process.env.PIXEL_CREW_GATEWAY_ID ?? "unknown",
+        machineId: process.env.PIXEL_CREW_MACHINE_ID ?? "unknown",
         instanceDir,
-        pid: Number(process.env.BIT_OFFICE_GATEWAY_PID) || process.pid,
-        startedAt: Number(process.env.BIT_OFFICE_GATEWAY_STARTED_AT) || Date.now(),
+        pid: Number(process.env.PIXEL_CREW_GATEWAY_PID) || process.pid,
+        startedAt: Number(process.env.PIXEL_CREW_GATEWAY_STARTED_AT) || Date.now(),
       }
       : undefined;
     const wt = createWorktree(base, agentId, session.name, owner);

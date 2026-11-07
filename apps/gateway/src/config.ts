@@ -3,13 +3,22 @@ import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { execSync } from "child_process";
-import { homedir } from "os";
 import { randomBytes } from "crypto";
+import { migrateLegacyDataDir } from "./data-dir.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const isDev = process.env.NODE_ENV === "development";
-export const CONFIG_DIR = resolve(homedir(), isDev ? ".open-office-dev" : ".open-office");
+// One-time move of ~/.open-office[-dev] → ~/.pixel-crew[-dev] (runs before anything reads the dir).
+const migration = migrateLegacyDataDir();
+if (migration.status === "migrated") {
+  console.log(`[Config] Migrated data dir ${migration.legacyDir} → ${migration.dataDir}${migration.symlinked ? " (old path is now a symlink)" : ""}`);
+} else if (migration.status === "failed") {
+  console.warn(`[Config] Could not migrate ${migration.legacyDir} (${migration.error}); continuing to use it`);
+}
+export const CONFIG_DIR = migration.dataDir;
+// Orchestrator and memory packages resolve the data dir on their own; point them at the same place.
+if (!process.env.PIXEL_CREW_HOME) process.env.PIXEL_CREW_HOME = CONFIG_DIR;
 const CONFIG_FILE = resolve(CONFIG_DIR, "config.json");
 
 
@@ -90,7 +99,7 @@ function ensureGitRepo(dir: string) {
   } catch {
     try {
       execSync("git init", { cwd: dir, stdio: "pipe", timeout: 3000 });
-      execSync('git -c user.name=OpenOffice -c user.email=bot@open-office.local commit --allow-empty -m init', { cwd: dir, stdio: "pipe", timeout: 3000 });
+      execSync('git -c user.name=PixelCrew -c user.email=bot@pixel-crew.local commit --allow-empty -m init', { cwd: dir, stdio: "pipe", timeout: 3000 });
       console.log(`[Config] Initialized git repo in ${dir}`);
     } catch { /* ignore */ }
   }
@@ -98,7 +107,7 @@ function ensureGitRepo(dir: string) {
 
 function resolveDefaultWorkspace(): string {
   if (isDev) {
-    // Dev mode: use ~/.open-office-dev/projects/ (outside git repo so Claude Code
+    // Dev mode: use ~/.pixel-crew-dev/projects/ (outside git repo so Claude Code
     // doesn't resolve to the source tree as its working directory)
     const ws = resolve(CONFIG_DIR, "projects");
     if (!existsSync(ws)) {
@@ -109,7 +118,7 @@ function resolveDefaultWorkspace(): string {
     return ws;
   }
   // Published mode: use the directory where the user ran the command
-  // Tauri sidecar runs with cwd="/", fall back to ~/.open-office/projects/
+  // Tauri sidecar runs with cwd="/", fall back to ~/.pixel-crew/projects/
   const cwd = process.cwd();
   if (cwd === "/" || cwd === "C:\\") {
     const ws = resolve(CONFIG_DIR, "projects");
@@ -129,7 +138,7 @@ function resolveDefaultWorkspace(): string {
  * - Falls back to "port-{wsPort}" so different ports auto-isolate
  *
  * Each gateway instance gets its own state directory under
- * ~/.open-office[-dev]/data/instances/{gatewayId}/ to prevent cross-instance
+ * ~/.pixel-crew[-dev]/data/instances/{gatewayId}/ to prevent cross-instance
  * context contamination (e.g. Tauri vs Web vs CLI all running separately).
  */
 function resolveGatewayId(): string {
@@ -153,7 +162,7 @@ function buildConfig() {
     machineId: getOrCreateMachineId(),
     /** Unique identifier for this gateway instance (isolates state from other instances) */
     gatewayId,
-    /** Per-instance state directory: ~/.open-office[-dev]/data/instances/{gatewayId}/ */
+    /** Per-instance state directory: ~/.pixel-crew[-dev]/data/instances/{gatewayId}/ */
     instanceDir,
     defaultWorkspace: (() => {
       const envWs = process.env.WORKSPACE;

@@ -1,20 +1,18 @@
 import { execSync } from "child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "fs";
 import path from "path";
-import { homedir } from "os";
+import { getDataDir } from "./paths.js";
 
 const TIMEOUT = 5000;
 
 // ---------------------------------------------------------------------------
 // Centralized worktree storage
-// All agent worktrees live under ~/.open-office[-dev]/worktrees/<repo-hash>/
+// All agent worktrees live under ~/.pixel-crew[-dev]/worktrees/<repo-hash>/
 // This keeps them physically outside any repo, avoiding upward-traversal issues
 // (Claude Code / agents walking up to find project root, CLAUDE.md, etc.).
 // ---------------------------------------------------------------------------
 
-const OPEN_OFFICE_DIR = path.join(homedir(),
-  process.env.NODE_ENV === "development" ? ".open-office-dev" : ".open-office");
-const WORKTREE_BASE_DIR = path.join(OPEN_OFFICE_DIR, "worktrees");
+const WORKTREE_BASE_DIR = path.join(getDataDir(), "worktrees");
 
 function simpleHash(str: string): string {
   let hash = 0;
@@ -313,7 +311,7 @@ function findWorktreePathForBranch(repoRoot: string, branch: string): string | n
 
 /**
  * Create a git worktree for an agent's task.
- * Worktrees are stored centrally at ~/.open-office[-dev]/worktrees/<repo-hash>/
+ * Worktrees are stored centrally at ~/.pixel-crew[-dev]/worktrees/<repo-hash>/
  * Returns the worktree path, or null if workspace is not a git repo.
  */
 export function createWorktree(
@@ -840,7 +838,7 @@ export function removeWorktree(worktreePath: string, branch: string, workspace?:
 
 /**
  * Clean up stale agent worktrees and branches.
- * Scans ~/.open-office[-dev]/worktrees/<repo-hash>/ for the given workspace.
+ * Scans ~/.pixel-crew[-dev]/worktrees/<repo-hash>/ for the given workspace.
  */
 export function cleanupStaleWorktrees(
   workspace: string,

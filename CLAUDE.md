@@ -1,8 +1,10 @@
-# Open Office
+# Pixel Crew
+
+Fork of longyangxi/OpenOffice (bit-office), MIT. Workspace packages: `pixel-crew` (gateway/CLI), `@pixel-crew/shared`, `@pixel-crew/orchestrator`, `@pixel-crew/memory`.
 
 ## Project Structure
-- `apps/web` - Next.js 15 PWA (Vercel deployment)
-- `apps/gateway` - Mac daemon (Node.js + multi-channel + AI CLI control)
+- `apps/web` - Next.js 15 PWA (static export, served by the gateway)
+- `apps/gateway` - Node.js daemon (multi-channel + AI CLI control), npm/bin name `pixel-crew`
 - `packages/shared` - Shared event protocol (Zod schemas)
 - `packages/orchestrator` - Multi-agent engine (worktree, delegation, phases)
 - `packages/memory` - Persistent agent memory (sessions, facts, shared knowledge)
@@ -13,14 +15,17 @@
 ## Key Commands
 - `pnpm dev:web` - Start web dev server
 - `pnpm dev:gateway` - Start gateway
+- `pnpm typecheck` / `pnpm test` / `pnpm lint` - Checks (CI runs them on ubuntu, macOS, windows)
+- Tests use the fake backend (`id: "fake"`); never start a real AI CLI in tests
 
 ## Architecture
 - **Channels**: WebSocket (always), Ably (optional), Telegram (optional)
-- **UI**: PixiJS v8 pixel office + Key Node Mode agent cards
+- **UI**: Canvas 2D pixel office (ported from pixel-agents; no PixiJS) + Key Node Mode agent cards
 
 ## Data Directory
-- Dev: `~/.open-office-dev/`, Release: `~/.open-office/`
-- `config.json` — global config
+- Dev: `~/.pixel-crew-dev/`, Release: `~/.pixel-crew/` (`PIXEL_CREW_HOME` overrides)
+- Legacy `~/.open-office[-dev]/` is moved here on first run and left as a symlink
+- `config.json` — global config (`office` section is zod-validated and hot-reloaded)
 - `data/instances/<id>/` — per-gateway state (logs, sessions, memory)
 - `data/agents.json` — agent definitions
 - `projects/` — default agent workspace (team projects created here)
@@ -28,7 +33,7 @@
 
 ## Worktree Isolation
 - One agent = one worktree = one branch (keyed by agentId, not taskId)
-- Worktrees stored outside repo at `~/.open-office[-dev]/worktrees/` to prevent path traversal
+- Worktrees stored outside repo at `~/.pixel-crew[-dev]/worktrees/` to prevent path traversal
 - On task:done: auto-merge to main (default), with per-agent toggle + undo merge
 - Before each task: auto-rebase onto latest main, conflicts auto-resolved
 - Cleanup: on fire agent only (no startup GC)

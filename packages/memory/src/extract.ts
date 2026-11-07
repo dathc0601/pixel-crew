@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// @bit-office/memory — Extraction engine
+// @pixel-crew/memory — Extraction engine
 //
 // Parses agent stdout output to produce:
 //   - L1 SessionSummary (structured task summary)

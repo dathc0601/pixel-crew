@@ -6,7 +6,7 @@ import { useOfficeStore, imageUploadCallbacks } from "@/store/office-store";
 import { connect, sendCommand } from "@/lib/connection";
 import { getConnection } from "@/lib/storage";
 import { nanoid } from "nanoid";
-import type { AgentDefinition } from "@office/shared";
+import type { AgentDefinition } from "@pixel-crew/shared";
 import { OfficeState } from "@/components/office/engine/officeState";
 import { EditorState } from "@/components/office/editor/editorState";
 import { EditTool } from "@/components/office/types";
@@ -242,14 +242,15 @@ export default function OfficePage() {
   const [termTheme, setTermTheme] = useState("studio");
   applyTermTheme(termTheme);
   useEffect(() => {
-    const saved = localStorage.getItem("open-office-theme");
+    // "open-office-theme" is the pre-rename key; read it once so existing users keep their theme.
+    const saved = localStorage.getItem("pixel-crew-theme") ?? localStorage.getItem("open-office-theme");
     if (saved && TERM_THEMES[saved]) {
       setTermTheme(saved);
     }
   }, []);
   useEffect(() => {
     applyTermTheme(termTheme);
-    localStorage.setItem("open-office-theme", termTheme);
+    localStorage.setItem("pixel-crew-theme", termTheme);
   }, [termTheme]);
 
   // ── Cmd+K command palette ──
@@ -1283,7 +1284,7 @@ export default function OfficePage() {
           pointerEvents: "none",
         }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, pointerEvents: "auto" }}>
-            <h1 className="px-font" style={{ fontSize: 12, margin: 0, color: "#e8b040", textShadow: "2px 2px 0px rgba(0,0,0,0.8), 0 0 12px rgba(200,155,48,0.3)", letterSpacing: "0.05em" }}>Open Office</h1>
+            <h1 className="px-font" style={{ fontSize: 12, margin: 0, color: "#e8b040", textShadow: "2px 2px 0px rgba(0,0,0,0.8), 0 0 12px rgba(200,155,48,0.3)", letterSpacing: "0.05em" }}>Pixel Crew</h1>
             <span
               title={APP_BUILD_TIME ? `Web UI v${APP_VERSION}\nBuild ${APP_BUILD_TIME}` : `Web UI v${APP_VERSION}`}
               style={{

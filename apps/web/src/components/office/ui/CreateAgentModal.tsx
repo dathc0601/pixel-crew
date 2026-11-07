@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { nanoid } from "nanoid";
-import type { AgentDefinition } from "@office/shared";
+import type { AgentDefinition } from "@pixel-crew/shared";
 import { ROLE_CATALOG, ROLE_DESC_MAP, ROLE_PRESETS, PERSONALITY_PRESETS } from "./office-constants";
 import { TERM_PANEL, TERM_SURFACE, TERM_BORDER, TERM_BORDER_DIM, TERM_BG, TERM_TEXT, TERM_GREEN, TERM_DIM, TERM_SEM_BLUE } from "./termTheme";
 import SpriteAvatar from "./SpriteAvatar";

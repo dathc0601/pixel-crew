@@ -1,13 +1,14 @@
 <div align="center">
 
-# Open Office
+# Pixel Crew
 
-### A visible workspace for AI agents to collaborate as a single team.
+### A pixel-art office where a small crew of AI coding agents works as one team.
 
-[![npm version](https://img.shields.io/npm/v/open-office?color=cb3837&logo=npm)](https://www.npmjs.com/package/open-office)
+Fork of [longyangxi/OpenOffice](https://github.com/longyangxi/OpenOffice) (formerly "bit-office"), MIT.
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node.js](https://img.shields.io/badge/Node.js-18+-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/longyangxi/open-office/pulls)
+[![Node.js](https://img.shields.io/badge/Node.js-22+-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/dathc0601/pixel-crew/pulls)
 
 **Supports Claude, Codex, Gemini, Copilot, Cursor, Aider, OpenCode, Pi & Sapling — one team 🚀**
 
@@ -33,9 +34,9 @@
 
 ## Quick Start
 
-```bash
-npx bit-office
-```
+Pixel Crew is not published to npm yet. Run it from source (see below).
+
+By default the daemon listens on `127.0.0.1` only and runs Claude Code with `--permission-mode auto`. See [Security defaults](#security-defaults).
 
 ## Learn More
 
@@ -47,26 +48,26 @@ npx bit-office
 
 ### Prerequisites
 
-- **Node.js** 18+
-- **pnpm**
+- **Node.js** 22+
+- **pnpm** 9
 - At least one AI CLI installed (see [Supported Backends](#supported-backends))
 
 ### Setup
 
 ```bash
-git clone https://github.com/longyangxi/open-office.git
-cd open-office
+git clone https://github.com/dathc0601/pixel-crew.git
+cd pixel-crew
 pnpm install
 pnpm dev
 ```
 
 ## Desktop App (Tauri)
 
-Open Office also ships as a native **macOS desktop app** powered by [Tauri](https://tauri.app). 
+Pixel Crew also ships as a native **macOS desktop app** powered by [Tauri](https://tauri.app). 
 
 ### Prerequisites
 
-- **Node.js** 18+, **pnpm**
+- **Node.js** 22+, **pnpm**
 - **Rust** toolchain — install via: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
 
 ### Dev Mode
@@ -82,15 +83,15 @@ pnpm dev:desktop
 pnpm build:desktop
 ```
 
-Produces `Open Office.app` and `.dmg` at:
+Produces `Pixel Crew.app` and `.dmg` at:
 ```
-apps/desktop/src-tauri/target/release/bundle/macos/Open Office.app
-apps/desktop/src-tauri/target/release/bundle/dmg/Open Office_0.1.0_aarch64.dmg
+apps/desktop/src-tauri/target/release/bundle/macos/Pixel Crew.app
+apps/desktop/src-tauri/target/release/bundle/dmg/Pixel Crew_0.1.0_aarch64.dmg
 ```
 
 ## Supported Backends
 
-Open Office auto-detects installed AI CLIs at startup. Each backend has its own instruction file convention and capability set.
+Pixel Crew auto-detects installed AI CLIs at startup. Each backend has its own instruction file convention and capability set.
 
 | Backend | Command | Stability | Guard | Instruction File | Resume | Structured Output | Tested |
 |---|---|---|---|---|---|---|---|
@@ -111,9 +112,9 @@ Open Office auto-detects installed AI CLIs at startup. Each backend has its own 
 ## Architecture
 
 ```
-open-office/
+pixel-crew/
 ├── apps/
-│   ├── web/            # Next.js PWA + PixiJS pixel office + control UI
+│   ├── web/            # Next.js PWA + Canvas 2D pixel office + control UI
 │   ├── gateway/        # Runtime daemon: events, channels, policy, orchestration
 │   └── desktop/        # Tauri v2 native shell (macOS .app/.dmg)
 └── packages/
@@ -126,16 +127,25 @@ open-office/
 
 ## Tech Stack
 
-- **Frontend**: Next.js 15, React, PixiJS v8, Zustand
+- **Frontend**: Next.js 15 (static export), React 19, Canvas 2D renderer, Zustand
 - **Desktop**: Tauri v2 (Rust + system WebView)
 - **Backend**: Node.js daemon, WebSocket
 - **Memory**: Four-layer JSON store (session → agent → shared), Jaccard dedup
 - **Protocol**: Zod-validated event schemas
 - **Integrations**: Ably, Telegram, external process detection
 
+## Security defaults
+
+- The daemon binds to `127.0.0.1`. LAN access needs an explicit `--lan` flag (or `"lan": true` in the config file); remote devices then pair with the pair code.
+- `GET /connect` (quick connect) answers only loopback requests from the UI's own origin. CORS uses an allowlist, and WebSocket upgrades from foreign origins are rejected.
+- Pairing and share-link endpoints are rate-limited. Session tokens expire after 7 days; the owner can revoke all other sessions.
+- Agents run Claude Code with `--permission-mode auto`. Backends without an auto mode ask you (the CEO) to approve before each spawn. Bypass mode is only used for a backend you opt into explicitly in the config file.
+- The daemon refuses to run as root unless started with `--allow-root`.
+- Previews are served from a separate port and sandboxed, so preview code cannot read the control UI's storage.
+
 ## Contributing
 
-Issues and PRs are welcome. If you're exploring AI-native dev tooling, workflows, or interfaces, Open Office is a great playground for experiments.
+Issues and PRs are welcome. If you're exploring AI-native dev tooling, workflows, or interfaces, Pixel Crew is a great playground for experiments.
 
 ## Acknowledgments
 
@@ -149,6 +159,6 @@ Pixel office art inspired by [pixel-agents](https://github.com/pablodelucca/pixe
 
 <div align="center">
 
-**If Open Office helps your workflow, consider giving it a star!**
+**If Pixel Crew helps your workflow, consider giving it a star!**
 
 </div>

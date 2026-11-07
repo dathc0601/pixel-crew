@@ -4,7 +4,7 @@ import "@/components/office/ui/primitives/primitives.css";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 export const metadata: Metadata = {
-  title: "Open Office",
+  title: "Pixel Crew",
   description: "Control your AI agents from anywhere",
   manifest: "/manifest.json",
 };

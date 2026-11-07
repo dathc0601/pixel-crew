@@ -16,7 +16,7 @@ export default defineConfig({
   clean: true,
   splitting: false,
   sourcemap: true,
-  noExternal: bundleAll ? [/(.*)/] : ["@office/shared"],
+  noExternal: bundleAll ? [/(.*)/] : ["@pixel-crew/shared"],
   external: bundleAll ? builtinModules.flatMap((m) => [m, `node:${m}`]) : [],
   banner: {
     js: `#!/usr/bin/env node\n${requireShim}`,

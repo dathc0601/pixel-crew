@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
-// @bit-office/memory — File-based storage layer
+// @pixel-crew/memory — File-based storage layer
 //
-// All data lives under a configurable root directory (default ~/.open-office[-dev]/data/memory/).
+// All data lives under a configurable root directory (default ~/.pixel-crew[-dev]/data/memory/).
 // Layout:
 //   {root}/memory.json              — legacy project-level memory
 //   {root}/sessions/{agentId}.json  — L1 session history per agent
@@ -23,8 +23,12 @@ import type {
 
 /* ── Configurable root ──────────────────────────────────────────────────── */
 
-let _root = path.join(homedir(),
-  process.env.NODE_ENV === "development" ? ".open-office-dev" : ".open-office",
+// Default: ~/.pixel-crew[-dev]/data/memory (PIXEL_CREW_HOME overrides the root).
+// The gateway normally calls setStorageRoot() with an instance-scoped path.
+let _root = path.join(
+  process.env.PIXEL_CREW_HOME
+    ? path.resolve(process.env.PIXEL_CREW_HOME)
+    : path.join(homedir(), process.env.NODE_ENV === "development" ? ".pixel-crew-dev" : ".pixel-crew"),
   "data", "memory");
 
 /** Override the storage root directory (call before any read/write). */

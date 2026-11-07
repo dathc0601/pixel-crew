@@ -1,8 +1,8 @@
 import { spawn, execSync, type ChildProcess } from "child_process";
 import path from "path";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
-import { homedir } from "os";
 import { CONFIG } from "./config.js";
+import { getDataDir } from "./paths.js";
 import { resolvePreview } from "./preview-resolver.js";
 import { parseAgentOutput } from "./output-parser.js";
 import { nanoid } from "nanoid";
@@ -40,9 +40,9 @@ function summarizeToolUse(name: string, input: Record<string, unknown> | undefin
 
 /* ── Persist session IDs + recovery context across restarts ───────── */
 
-// RecoveryContext is now defined in @bit-office/memory (packages/memory/src/types.ts).
+// RecoveryContext is now defined in @pixel-crew/memory (packages/memory/src/types.ts).
 // It includes structured SessionSummary instead of raw recentMessages.
-import type { RecoveryContext } from "@bit-office/memory";
+import type { RecoveryContext } from "@pixel-crew/memory";
 
 /** Disk format: value is either a legacy string (sessionId) or the new object */
 interface SessionEntry {
@@ -55,10 +55,9 @@ type SessionMap = Record<string, string | SessionEntry>;
 /**
  * Session file path is instance-scoped to prevent cross-instance contamination.
  * Set via setSessionDir() from the gateway using its instanceDir config.
- * Falls back to ~/.open-office[-dev] for backwards compatibility.
+ * Falls back to the data dir root (~/.pixel-crew[-dev]).
  */
-let _sessionDir: string = path.join(homedir(),
-  process.env.NODE_ENV === "development" ? ".open-office-dev" : ".open-office");
+let _sessionDir: string = getDataDir();
 
 export function setSessionDir(dir: string) {
   _sessionDir = dir;
@@ -668,7 +667,7 @@ export class AgentSession {
                     }
                   }
                 }
-                // (conversationLog removed — recovery context now uses @bit-office/memory's
+                // (conversationLog removed — recovery context now uses @pixel-crew/memory's
                 //  structured SessionSummary instead of raw message fragments)
               } else if (msg.type === "result") {
                 // Result message: authoritative session total from msg.usage
@@ -788,7 +787,7 @@ export class AgentSession {
             const { summary, fullOutput, changedFiles, entryFile, projectDir, previewCmd, previewPort } = this.extractResult();
             this._lastFullOutput = fullOutput;
 
-            // Commit session to @bit-office/memory: extracts structured summary,
+            // Commit session to @pixel-crew/memory: extracts structured summary,
             // saves session history, and extracts reusable agent facts.
             // This replaces the old saveRecoveryContext + raw recentMessages approach.
             commitSession({

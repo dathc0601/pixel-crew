@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { AgentStatus, GatewayEvent, TaskResultPayload, AgentDefinition, UserRole } from "@office/shared";
+import type { AgentStatus, GatewayEvent, TaskResultPayload, AgentDefinition, UserRole } from "@pixel-crew/shared";
 import { tunnelRewrite } from "@/components/office/ui/office-utils";
 import { sendCommand } from "@/lib/connection";
 

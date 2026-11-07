@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { nanoid } from "nanoid";
-import type { AgentDefinition } from "@office/shared";
+import type { AgentDefinition } from "@pixel-crew/shared";
 import { sendCommand } from "@/lib/connection";
 import { folderPickCallbacks } from "@/store/office-store";
 import { BACKEND_OPTIONS } from "./office-constants";
@@ -247,7 +247,7 @@ function HireModal({ agentDefs, onHire, onCreate, onEdit, onDelete, onClose, ass
                     type="text"
                     value={workDir}
                     onChange={(e) => !dirLocked && setWorkDir(e.target.value)}
-                    placeholder="~/.open-office/projects"
+                    placeholder="~/.pixel-crew/projects"
                     style={{ flex: 1, opacity: dirLocked ? 0.6 : 1 }}
                     readOnly={dirLocked}
                   />

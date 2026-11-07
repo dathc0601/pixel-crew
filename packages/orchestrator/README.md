@@ -1,4 +1,4 @@
-# @bit-office/orchestrator
+# @pixel-crew/orchestrator
 
 Multi-agent team collaboration engine. Manages agent lifecycles, task delegation, phase transitions, preview detection, and result finalization — all behind a typed event-driven API.
 
@@ -130,7 +130,7 @@ Persistent cross-project learning system. Agents improve over time by rememberin
 
 ### How It Works
 
-- Storage: `~/.open-office[-dev]/data/memory/memory.json` (human-readable, persists across restarts)
+- Storage: `~/.pixel-crew[-dev]/data/memory/memory.json` (human-readable, persists across restarts)
 - Memory is **global**, not per-agent — all dev workers in any team share the same learned context
 - Only recurring patterns are injected (count ≥ 2), so one-off issues don't pollute prompts
 - Review patterns are capped at top 20, tech preferences at last 10, project history at last 50
@@ -151,7 +151,7 @@ USER'S PREFERRED TECH: Vanilla JS + Canvas, React + Tailwind
 ### API
 
 ```typescript
-import { getMemoryStore, clearMemory } from "@bit-office/orchestrator";
+import { getMemoryStore, clearMemory } from "@pixel-crew/orchestrator";
 
 // Inspect current memory
 const store = getMemoryStore();
@@ -170,7 +170,7 @@ When multiple agents work on the same repo, each agent gets its own **git worktr
 ### Design Principles
 
 - **One agent = one worktree = one branch.** Worktree and branch are keyed by `agentId`, not `taskId`. This keeps the directory stable across tasks so Claude Code `--resume` works (same CWD).
-- **Worktrees live outside the repo** at `~/.open-office[-dev]/worktrees/<repo-hash>/<agentId>/`. This prevents Claude Code from traversing up to the main repo root.
+- **Worktrees live outside the repo** at `~/.pixel-crew[-dev]/worktrees/<repo-hash>/<agentId>/`. This prevents Claude Code from traversing up to the main repo root.
 - **Branch naming:** `agent/<agentName>-<shortId>` (e.g. `agent/nova-pTTERq`). Unique per agent, human-readable.
 - **Branches are local only** — never pushed to remote. Visible in SourceTree/git tools via shared `.git`.
 
@@ -182,7 +182,7 @@ Agent gets task
   ├─ worktree exists? ──yes──> syncWorktreeToMain (rebase onto latest main)
   │                             skipped if pendingMerge=true
   │
-  └─ no ──> git worktree add ~/.open-office[-dev]/worktrees/<repo>/<agentId>
+  └─ no ──> git worktree add ~/.pixel-crew[-dev]/worktrees/<repo>/<agentId>
             creates branch agent/<name>-<id>
             session.clearHistory() (can't --resume in new CWD)
   │
@@ -292,7 +292,7 @@ const orc = createOrchestrator({
 ### Directory Layout
 
 ```
-~/.open-office-dev/              # dev mode (release: ~/.open-office/)
+~/.pixel-crew-dev/              # dev mode (release: ~/.pixel-crew/)
 ├── config.json
 ├── machine-id
 ├── data/
@@ -303,7 +303,7 @@ const orc = createOrchestrator({
 │   └── agents.json              # agent definitions
 ├── projects/                    # agent working directories (default workspace)
 └── worktrees/                   # centralized worktree storage
-    └── bit-office-a3f2b1/       # grouped by source repo
+    └── pixel-crew-a3f2b1/       # grouped by source repo
         ├── agent-pTTERq/        # one dir per agent (stable across tasks)
         ├── agent-1gZQUa/
         └── .owners/             # ownership metadata for GC
@@ -332,8 +332,8 @@ At the team level, `ResultFinalizer` adds two additional layers before this chai
 ### Basic Setup
 
 ```typescript
-import { createOrchestrator } from "@bit-office/orchestrator";
-import type { AIBackend } from "@bit-office/orchestrator";
+import { createOrchestrator } from "@pixel-crew/orchestrator";
+import type { AIBackend } from "@pixel-crew/orchestrator";
 
 const claude: AIBackend = {
   id: "claude",
@@ -473,7 +473,7 @@ if (state.projectDir) orc.setTeamProjectDir(state.projectDir);
 All magic numbers are centralized in `config.ts`:
 
 ```typescript
-import { CONFIG } from "@bit-office/orchestrator";
+import { CONFIG } from "@pixel-crew/orchestrator";
 
 CONFIG.delegation.maxDepth          // 5
 CONFIG.delegation.maxTotal          // 20
@@ -577,7 +577,7 @@ This shows peer names, roles, statuses, and last results — enough to avoid fil
 
 ### Agent State
 
-File: `~/.open-office[-dev]/data/instances/<id>/team-state.json` (instance-scoped)
+File: `~/.pixel-crew[-dev]/data/instances/<id>/team-state.json` (instance-scoped)
 
 ```typescript
 interface PersistedAgent {
@@ -617,7 +617,7 @@ interface PersistedTeam {
 
 ### Project History
 
-File: `~/.open-office[-dev]/data/project-history/<startedAt>-<name>.json`
+File: `~/.pixel-crew[-dev]/data/project-history/<startedAt>-<name>.json`
 
 Completed projects are archived with all events, agents, team state, preview info, token usage, and ratings. Event buffer is persisted to `project-events.jsonl` (instance-scoped) so archives survive gateway restarts.
 

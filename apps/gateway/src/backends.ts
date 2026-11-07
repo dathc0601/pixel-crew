@@ -2,7 +2,7 @@ import { execSync } from "child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { homedir } from "os";
 import path from "path";
-import type { AIBackend } from "@bit-office/orchestrator";
+import type { AIBackend } from "@pixel-crew/orchestrator";
 
 const isRoot = process.getuid?.() === 0;
 

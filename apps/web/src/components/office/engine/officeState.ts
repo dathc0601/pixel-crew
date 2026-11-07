@@ -29,7 +29,7 @@ import {
   DEFAULT_COLS,
   DEFAULT_ROWS,
 } from '../constants'
-import type { AgentStatus } from '@office/shared'
+import type { AgentStatus } from '@pixel-crew/shared'
 
 /**
  * Bridge between our Zustand store (string agentIds) and the pixel-agents

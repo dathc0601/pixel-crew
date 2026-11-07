@@ -1,17 +1,17 @@
 {
-  "name": "bit-office-root",
+  "name": "pixel-crew-root",
   "private": true,
   "version": "0.1.101",
   "scripts": {
-    "dev": "pnpm --filter bit-office dev & pnpm --filter web dev",
+    "dev": "pnpm --filter pixel-crew dev & pnpm --filter web dev",
     "dev:web": "pnpm --filter web dev",
-    "dev:gateway": "pnpm --filter bit-office dev",
-    "start": "pnpm --filter web build && pnpm --filter bit-office start",
+    "dev:gateway": "pnpm --filter pixel-crew dev",
+    "start": "pnpm --filter web build && pnpm --filter pixel-crew start",
     "build": "pnpm -r build",
-    "build:release": "pnpm --filter web build && pnpm --filter bit-office build",
+    "build:release": "pnpm --filter web build && pnpm --filter pixel-crew build",
     "publish:release": "pnpm run build:release && cd apps/gateway && npm publish",
     "lint": "pnpm -r lint",
-    "dev:desktop": "pnpm --filter bit-office-desktop dev",
+    "dev:desktop": "pnpm --filter pixel-crew-desktop dev",
     "build:desktop": "bash scripts/install-desktop.sh",
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "pnpm -r --if-present test"

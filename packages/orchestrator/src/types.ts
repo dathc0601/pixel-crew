@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Agent status (local definition — no dependency on @office/shared)
+// Agent status (local definition — no dependency on @pixel-crew/shared)
 // ---------------------------------------------------------------------------
 
 export type AgentStatus = "idle" | "working" | "waiting_approval" | "done" | "error";

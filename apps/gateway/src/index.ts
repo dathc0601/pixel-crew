@@ -5,10 +5,10 @@ import { telegramChannel, setTelegramAgentDefs, syncTelegramHiredAgents } from "
 import { config, CONFIG_DIR, hasSetupRun, reloadConfig, saveConfig } from "./config.js";
 import { runSetup } from "./setup.js";
 import { detectBackends, getBackend, getAllBackends } from "./backends.js";
-import { createOrchestrator, getMergeHistory, previewServer, recordProjectRatings, parseAgentOutput, setSessionDir, setStorageRoot, syncAgentDefs, type Orchestrator, type OrchestratorEvent, type RuntimeOwnerInfo, type TeamPhaseChangedEvent } from "@bit-office/orchestrator";
-import type { Command, GatewayEvent, UserRole } from "@office/shared";
+import { createOrchestrator, getMergeHistory, previewServer, recordProjectRatings, parseAgentOutput, setSessionDir, setStorageRoot, syncAgentDefs, type Orchestrator, type OrchestratorEvent, type RuntimeOwnerInfo, type TeamPhaseChangedEvent } from "@pixel-crew/orchestrator";
+import type { Command, GatewayEvent, UserRole } from "@pixel-crew/shared";
 import type { CommandMeta } from "./transport.js";
-import { DEFAULT_AGENT_DEFS, type AgentDefinition } from "@office/shared";
+import { DEFAULT_AGENT_DEFS, type AgentDefinition } from "@pixel-crew/shared";
 import { nanoid } from "nanoid";
 import { exec, execFile, execFileSync, execSync } from "child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, renameSync, unlinkSync, rmdirSync } from "fs";
@@ -165,7 +165,7 @@ function createUniqueProjectDir(workspace: string, baseName: string): string {
 const AGENTS_FILE = path.join(CONFIG_DIR, "data", "agents.json");
 const SKILLS_DIR = path.join(CONFIG_DIR, "skills");
 
-/** Scan ~/.open-office[-dev]/skills/ and return metadata for each skill */
+/** Scan ~/.pixel-crew[-dev]/skills/ and return metadata for each skill */
 function listSkills(): Array<{ name: string; title: string; isFolder: boolean }> {
   if (!existsSync(SKILLS_DIR)) return [];
   try {
@@ -715,7 +715,7 @@ function handleCommand(parsed: Command, meta: CommandMeta) {
       // Initialize git repo so worktrees can be created for each dev agent
       try {
         execSync("git init", { cwd: projectDir, stdio: "pipe" });
-        execSync("git -c user.name=OpenOffice -c user.email=bot@openoffice.local commit --allow-empty -m 'init'", { cwd: projectDir, stdio: "pipe" });
+        execSync("git -c user.name=PixelCrew -c user.email=bot@pixel-crew.local commit --allow-empty -m 'init'", { cwd: projectDir, stdio: "pipe" });
         console.log(`[Gateway] Initialized git repo in ${projectDir}`);
       } catch (err) {
         console.error(`[Gateway] Failed to init git: ${(err as Error).message}`);
@@ -1366,11 +1366,11 @@ async function main() {
   // Startup GC was removed because it could destroy worktrees with pending unmerged changes.
 
   runtimeState = registerRuntimeState();
-  process.env.BIT_OFFICE_GATEWAY_ID = config.gatewayId;
-  process.env.BIT_OFFICE_MACHINE_ID = config.machineId;
-  process.env.BIT_OFFICE_INSTANCE_DIR = config.instanceDir;
-  process.env.BIT_OFFICE_GATEWAY_PID = String(runtimeState.pid);
-  process.env.BIT_OFFICE_GATEWAY_STARTED_AT = String(runtimeState.startedAt);
+  process.env.PIXEL_CREW_GATEWAY_ID = config.gatewayId;
+  process.env.PIXEL_CREW_MACHINE_ID = config.machineId;
+  process.env.PIXEL_CREW_INSTANCE_DIR = config.instanceDir;
+  process.env.PIXEL_CREW_GATEWAY_PID = String(runtimeState.pid);
+  process.env.PIXEL_CREW_GATEWAY_STARTED_AT = String(runtimeState.startedAt);
 
   // Events worth archiving in project history (skip noise like status/log/sync)
   const ARCHIVE_EVENT_TYPES = new Set([

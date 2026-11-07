@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { nanoid } from "nanoid";
-import type { AgentDefinition } from "@office/shared";
+import type { AgentDefinition } from "@pixel-crew/shared";
 import { sendCommand } from "@/lib/connection";
 import { folderPickCallbacks } from "@/store/office-store";
 import { BACKEND_OPTIONS } from "./office-constants";

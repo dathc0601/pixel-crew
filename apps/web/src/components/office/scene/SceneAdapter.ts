@@ -1,4 +1,4 @@
-import type { AgentStatus } from "@office/shared";
+import type { AgentStatus } from "@pixel-crew/shared";
 
 /**
  * Visual metadata for an agent entering the scene.

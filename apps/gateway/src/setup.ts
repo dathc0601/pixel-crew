@@ -37,7 +37,7 @@ export async function runSetup(): Promise<void> {
 
   console.log("");
   console.log("╔══════════════════════════════════════╗");
-  console.log("║       Open Office — First Setup       ║");
+  console.log("║        Pixel Crew — First Setup       ║");
   console.log("╚══════════════════════════════════════╝");
   console.log("");
   console.log("Press Enter to skip any step.\n");

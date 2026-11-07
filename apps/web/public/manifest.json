@@ -1,7 +1,7 @@
 {
-  "name": "Open Office",
-  "short_name": "Office",
-  "description": "Control your AI agents from anywhere",
+  "name": "Pixel Crew",
+  "short_name": "Pixel Crew",
+  "description": "A pixel-art office for your AI coding agents",
   "start_url": "/office",
   "display": "standalone",
   "background_color": "#1a1a2e",
