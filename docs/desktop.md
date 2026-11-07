@@ -79,7 +79,7 @@ entry; no administrator rights are needed.
 ```sh
 pnpm install
 pnpm --filter pixel-crew-desktop build   # web + gateway bundle + installer for this OS
-pnpm build:desktop                        # same, bumps the patch version; on macOS installs to /Applications
+pnpm build:desktop                        # same; on macOS installs to /Applications (never bumps the version)
 ```
 
 You need Rust (stable, via rustup) and the Tauri system dependencies for your OS

@@ -1,19 +1,18 @@
 #!/usr/bin/env node
-// `pnpm build:desktop`: bumps the patch version, builds the desktop app for this OS and,
-// on macOS, installs it into /Applications. Cross-platform replacement for the old
-// install-desktop.sh. Pass --no-bump to keep the version, --no-install to only build.
+// `pnpm build:desktop`: builds the desktop app for this OS and, on macOS, installs it into
+// /Applications. Cross-platform replacement for the old install-desktop.sh. Pass
+// --no-install to only build. Versions are set by release-please (see CONTRIBUTING.md),
+// so local builds never bump them.
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const tauriConfPath = join(root, "apps", "desktop", "src-tauri", "tauri.conf.json");
-const rootPkgPath = join(root, "package.json");
 const args = new Set(process.argv.slice(2));
 
 const readJson = (p) => JSON.parse(readFileSync(p, "utf-8"));
-const writeJson = (p, v) => writeFileSync(p, JSON.stringify(v, null, 2) + "\n");
 
 const tauriConf = readJson(tauriConfPath);
 const appName = tauriConf.productName;
@@ -22,19 +21,7 @@ if (!appName) {
   process.exit(1);
 }
 
-// Auto-increment the patch version in tauri.conf.json and the root package.json (the UI reads the root one)
-if (!args.has("--no-bump")) {
-  const [major, minor, patch] = String(tauriConf.version).split(".").map((n) => Number(n) || 0);
-  const next = `${major}.${minor}.${patch + 1}`;
-  tauriConf.version = next;
-  writeJson(tauriConfPath, tauriConf);
-  const rootPkg = readJson(rootPkgPath);
-  rootPkg.version = next;
-  writeJson(rootPkgPath, rootPkg);
-  console.log(`Building ${appName} v${next}...`);
-} else {
-  console.log(`Building ${appName} v${tauriConf.version}...`);
-}
+console.log(`Building ${appName} v${tauriConf.version}...`);
 
 const res = spawnSync("pnpm", ["--filter", "pixel-crew-desktop", "build"], {
   cwd: root,

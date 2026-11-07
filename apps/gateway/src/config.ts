@@ -6,6 +6,7 @@ import { execFileSync } from "child_process";
 import { randomBytes } from "crypto";
 import { migrateLegacyDataDir } from "./data-dir.js";
 import { OfficeConfigManager } from "./office-config.js";
+import { DEMO_MODE } from "./demo-mode.js";
 import type { OfficeConfig } from "@pixel-crew/shared";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -121,9 +122,10 @@ function ensureGitRepo(dir: string) {
 }
 
 function resolveDefaultWorkspace(): string {
-  if (isDev) {
+  if (isDev || DEMO_MODE) {
     // Dev mode: use ~/.pixel-crew-dev/projects/ (outside git repo so Claude Code
-    // doesn't resolve to the source tree as its working directory)
+    // doesn't resolve to the source tree as its working directory). Demo mode keeps its
+    // scripted projects in its own data dir instead of the directory it was started from.
     const ws = resolve(CONFIG_DIR, "projects");
     if (!existsSync(ws)) {
       mkdirSync(ws, { recursive: true });

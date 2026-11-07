@@ -1,6 +1,6 @@
 {
   "name": "pixel-crew",
-  "version": "1.2.5",
+  "version": "0.2.0",
   "description": "Pixel Crew: run a small pixel-art company of AI coding agents from your browser or phone",
   "type": "module",
   "bin": {
