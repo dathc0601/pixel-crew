@@ -22,6 +22,7 @@ import type { GatewayEvent } from "@pixel-crew/shared";
 import { AttachManager, type ExternalSession } from "../attach/attach-manager.js";
 import { handleAttachCommand } from "../attach/attach-commands.js";
 import { argsBypassPermissions, readClaudeSession } from "../attach/claude-sessions.js";
+import { ATTACHABLE_SETTINGS, claudeAttachableArgs } from "../attach/claude-attachable.js";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -248,5 +249,10 @@ describe("attaching external Claude sessions", () => {
     assert.deepEqual(third.manager.restore(), []);
     assert.equal(third.orc.getAgent(ext.agentId), undefined);
     assert.deepEqual(JSON.parse(readFileSync(o.stateFile, "utf-8")).attachments, []);
+  });
+
+  it("claude-attachable only adds a per-session settings file in front of the owner's flags", () => {
+    assert.deepEqual(claudeAttachableArgs("/tmp/s.json", ["--name", "shop"]), ["--settings", "/tmp/s.json", "--name", "shop"]);
+    assert.deepEqual(ATTACHABLE_SETTINGS, { crossSessionInbound: "accept" });
   });
 });

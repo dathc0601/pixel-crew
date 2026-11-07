@@ -1,6 +1,8 @@
 // Must stay the first import: exits before any files are created when run as root without --allow-root
 import "./root-guard.js";
-// Second: demo mode picks its own data dir before config.ts resolves paths
+// `pixel-crew claude-attachable …` runs and exits here, before any gateway module loads
+import "./subcommands.js";
+// Then: demo mode picks its own data dir before config.ts resolves paths
 import { DEMO_MODE, DEMO_BACKEND_ID, DEMO_TEAM, resolveDemoAgentScript, writeDemoScenario } from "./demo-mode.js";
 import { registerChannel, initTransports, publishEvent, destroyTransports, reinitChannel, isChannelActive } from "./transport.js";
 import { wsChannel, setPairCode, sendToClient, revokeAllSessions, connectedClientCount, onClientCountChange, createPairLink, listDevices, ownerClientIds, revokeDevice, onDevicesChange } from "./ws-server.js";
