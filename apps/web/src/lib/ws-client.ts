@@ -1,15 +1,19 @@
 import { parseGatewayEventLite as parseGatewayEvent } from "@pixel-crew/shared/client";
 import { useOfficeStore } from "@/store/office-store";
+import { setLinkState, useConnectionStore } from "@/store/connection-store";
+import { debugLog } from "@/lib/debug";
 
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let currentUrl: string | null = null;
 let currentSessionToken: string | null = null;
 
-// Exponential backoff state
+// Exponential backoff state. Focus, a visible tab and the browser going online also
+// reconnect at once (installWakeListeners), so the cap only matters for an idle tab.
 const RECONNECT_BASE_MS = 2000;
-const RECONNECT_MAX_MS = 30000;
+const RECONNECT_MAX_MS = 10000;
 let reconnectDelay = RECONNECT_BASE_MS;
+let wakeListenersInstalled = false;
 
 export function connectToWs(wsUrl: string, sessionToken?: string) {
   // Clean up any existing connection first
@@ -17,7 +21,29 @@ export function connectToWs(wsUrl: string, sessionToken?: string) {
   currentUrl = wsUrl;
   currentSessionToken = sessionToken ?? null;
   reconnectDelay = RECONNECT_BASE_MS; // reset backoff on fresh connect
+  installWakeListeners();
   doConnect();
+}
+
+/** Reconnects now instead of waiting for the backoff timer. No-op while connected or connecting. */
+export function retryWsNow() {
+  if (!currentUrl || ws) return;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  reconnectDelay = RECONNECT_BASE_MS;
+  doConnect();
+}
+
+function installWakeListeners() {
+  if (wakeListenersInstalled || typeof window === "undefined") return;
+  wakeListenersInstalled = true;
+  window.addEventListener("focus", retryWsNow);
+  window.addEventListener("online", retryWsNow);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") retryWsNow();
+  });
 }
 
 function cleanup() {
@@ -40,9 +66,11 @@ function doConnect() {
   if (!currentUrl) return;
 
   const socket = new WebSocket(currentUrl);
+  // Keep the banner up while an attempt after an outage is in flight; drop the countdown
+  setLinkState(useConnectionStore.getState().offline, null);
 
   socket.onopen = () => {
-    console.log("[WS] Connected");
+    debugLog("[WS] Connected");
     // Reset backoff on successful connection
     reconnectDelay = RECONNECT_BASE_MS;
     // Send AUTH handshake first
@@ -50,6 +78,7 @@ function doConnect() {
       socket.send(JSON.stringify({ type: "AUTH", sessionToken: currentSessionToken }));
     }
     useOfficeStore.getState().setConnected(true);
+    setLinkState(false, null);
     // Send PING to get current agent statuses, then request persisted chat history
     if (socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({ type: "PING" }));
@@ -89,14 +118,18 @@ function doConnect() {
   };
 
   socket.onclose = () => {
-    console.log("[WS] Disconnected");
+    debugLog("[WS] Disconnected");
     useOfficeStore.getState().setConnected(false);
     // Only reconnect if this is still the active socket
     if (ws === socket && currentUrl) {
       ws = null;
-      console.log(`[WS] Reconnecting in ${reconnectDelay}ms...`);
-      reconnectTimer = setTimeout(doConnect, reconnectDelay);
-      // Exponential backoff: 2s → 3s → 4.5s → ... → 30s max
+      debugLog(`[WS] Reconnecting in ${reconnectDelay}ms...`);
+      setLinkState(true, Date.now() + reconnectDelay);
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        doConnect();
+      }, reconnectDelay);
+      // Exponential backoff: 2s → 3s → 4.5s → ... → 10s max
       reconnectDelay = Math.min(reconnectDelay * 1.5, RECONNECT_MAX_MS);
     }
   };
@@ -108,16 +141,19 @@ function doConnect() {
   ws = socket;
 }
 
-export function sendWsCommand(command: Record<string, unknown>) {
+/** Returns false when the socket is not open; the caller tells the user (never queued). */
+export function sendWsCommand(command: Record<string, unknown>): boolean {
   if (!ws || ws.readyState !== WebSocket.OPEN) {
-    console.warn("[WS] Not connected, dropping command:", command.type);
-    return;
+    debugLog("[WS] Not connected, not sent:", command.type);
+    return false;
   }
-  console.log("[WS] Sending command:", command.type, command);
+  debugLog("[WS] Sending command:", command.type, command);
   ws.send(JSON.stringify(command));
+  return true;
 }
 
 export function disconnectWs() {
   currentUrl = null;
   cleanup();
+  setLinkState(false, null);
 }
