@@ -93,8 +93,14 @@ export function listRolePacks(dir = getBundledAgentsDir()): { packs: RolePackDef
   return { packs, invalid };
 }
 
-/** Directory containing our bundled agent .md files (agents/ is a sibling of src/ and dist/) */
+/**
+ * Directory containing our bundled agent .md files: dist/agents/ when this module is
+ * bundled into the gateway (copied there by copy-role-packs.mjs), else the agents/
+ * folder next to src/.
+ */
 export function getBundledAgentsDir(): string {
+  const bundled = resolve(__dirname, "agents");
+  if (existsSync(bundled)) return bundled;
   return resolve(__dirname, "../agents");
 }
 
