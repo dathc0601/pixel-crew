@@ -31,7 +31,7 @@ export interface FakeClaudeSessionOptions {
 
 /** Start fake-claude-session.mjs and wait until its registry, transcript and socket exist. */
 export function startFakeClaudeSession(o: FakeClaudeSessionOptions): Promise<FakeClaudeSession> {
-  const args = [o.scriptPath ?? FAKE_CLAUDE_SESSION_SCRIPT, "--home", o.home, "--cwd", o.cwd];
+  const args = [o.scriptPath ?? FAKE_CLAUDE_SESSION_SCRIPT, "--home", o.home, "--cwd", o.cwd, "--parent-pid", String(process.pid)];
   if (o.sessionId) args.push("--session-id", o.sessionId);
   if (o.replyDelayMs !== undefined) args.push("--reply-delay", String(o.replyDelayMs));
   if (o.reply) args.push("--reply", o.reply);

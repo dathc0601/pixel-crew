@@ -14,7 +14,7 @@
  *
  * Usage: node fake-claude-session.mjs --home <dir> --cwd <dir> [--session-id <id>]
  *        [--reply-delay <ms>] [--reply <text>] [--chatter <ms>] [--socket <path>] [--no-socket]
- *        [--exit-after-delivery]
+ *        [--exit-after-delivery] [--parent-pid <pid>]
  * Prints "FAKE_SESSION_READY {json}" once everything is written.
  */
 import { appendFileSync, mkdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
@@ -148,5 +148,9 @@ function cleanup() {
 }
 process.on("exit", cleanup);
 for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(sig, () => { cleanup(); process.exit(0); });
-// Stay alive until killed
-setInterval(() => {}, 1 << 30);
+// Stay alive until killed, or until the process that started us is gone (--parent-pid)
+const parentPid = Number(flag("--parent-pid", "0"));
+setInterval(() => {
+  if (!parentPid) return;
+  try { process.kill(parentPid, 0); } catch { cleanup(); process.exit(0); }
+}, 2000);
