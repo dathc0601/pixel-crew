@@ -27,8 +27,7 @@ import { computeAutoGrid } from "@/components/office/ui/autoGrid";
 import { APP_VERSION, APP_BUILD_TIME } from "@/lib/appMeta";
 
 // Extracted components — regular imports for hooks and inline-rendered components
-import { useConfirm } from "@/components/office/ui/ConfirmModal";
-import { SysMsg, TokenBadge } from "@/components/office/ui/MessageBubble";
+import { useConfirm } from "@/components/office/ui/useConfirm";
 
 // Dynamic imports for extracted components
 import dynamic from "next/dynamic";
@@ -46,6 +45,9 @@ const PreviewOverlay = dynamic(() => import("@/components/office/ui/PreviewOverl
 const CelebrationModal = dynamic(() => import("@/components/office/ui/CelebrationModal"), { ssr: false });
 const ConfettiOverlay = dynamic(() => import("@/components/office/ui/CelebrationModal").then(m => ({ default: m.ConfettiOverlay })), { ssr: false });
 const MessageBubble = dynamic(() => import("@/components/office/ui/MessageBubble"), { ssr: false });
+// Markdown (react-markdown + remark-gfm) loads with the first chat line, not with the office
+const SysMsg = dynamic(() => import("@/components/office/ui/MessageBubble").then(m => ({ default: m.SysMsg })), { ssr: false });
+const TokenBadge = dynamic(() => import("@/components/office/ui/MessageBubble").then(m => ({ default: m.TokenBadge })), { ssr: false });
 const TeamChatView = dynamic(() => import("@/components/office/ui/TeamChatView"), { ssr: false });
 const TeamActivityToast = dynamic(() => import("@/components/office/ui/TeamActivityToast"), { ssr: false });
 const TeamActivityLog = dynamic(() => import("@/components/office/ui/TeamActivityLog"), { ssr: false });
