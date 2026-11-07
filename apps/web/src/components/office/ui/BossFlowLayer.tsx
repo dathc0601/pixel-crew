@@ -12,6 +12,7 @@ import { useOfficeStore } from "@/store/office-store";
 import type { SceneAdapter, SceneObjectId } from "../scene/SceneAdapter";
 import { useBossFlowBridge } from "../bossflow/useBossFlowBridge";
 import TermButton from "./primitives/TermButton";
+import ApprovalsTray from "./ApprovalsTray";
 import { TERM_PANEL, TERM_BORDER, TERM_TEXT, TERM_DIM, TERM_SEM_YELLOW } from "./termTheme";
 
 const BossComposer = dynamic(() => import("./BossComposer"), { ssr: false });
@@ -64,7 +65,7 @@ export default function BossFlowLayer({ adapter, isOwner }: { adapter: SceneAdap
   return (
     <>
       {/* Boss-flow shortcuts: work without opening a side panel */}
-      <div style={{ position: "fixed", bottom: 64, left: 12, zIndex: 40, display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-start" }}>
+      <div className="pc-bossflow-chips" style={{ position: "fixed", bottom: "calc(64px + env(safe-area-inset-bottom))", left: 12, zIndex: 40, display: "flex", gap: 6, alignItems: "flex-start" }}>
         {demo && (
           <div
             role="status"
@@ -124,6 +125,8 @@ export default function BossFlowLayer({ adapter, isOwner }: { adapter: SceneAdap
           </TermButton>
         </div>
       )}
+
+      <ApprovalsTray isOwner={isOwner} />
 
       {notice && (
         <div role="status" style={{ position: "fixed", bottom: 64, left: "50%", transform: "translateX(-50%)", zIndex: 61, background: TERM_PANEL, border: `1px solid ${TERM_BORDER}`, color: TERM_DIM, fontSize: 12, padding: "6px 10px" }}>

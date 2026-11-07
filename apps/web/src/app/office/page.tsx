@@ -1261,7 +1261,8 @@ export default function OfficePage() {
       <AblyLoader />
       <BossFlowLayer adapter={sceneAdapter} isOwner={isOwner} />
       {/* Game Scene — fills remaining space after sidebar, centered */}
-      {sceneVisible && !consoleMode && <div style={{ flex: 1, position: "relative", minWidth: 0, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", marginRight: isMobile ? 0 : "calc(min(40vw, 800px) + 30px)" }}>
+      {/* Phones have no console sidebar, so they always get the office view (P5.3) */}
+      {(isMobile || (sceneVisible && !consoleMode)) && <div style={{ flex: 1, position: "relative", minWidth: 0, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", marginRight: isMobile ? 0 : "calc(min(40vw, 800px) + 30px)" }}>
         {/* Loading overlay — fades out to reveal scene */}
         <div style={{
           position: "absolute", inset: 0, zIndex: 5,

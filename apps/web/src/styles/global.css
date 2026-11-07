@@ -567,3 +567,48 @@ textarea:focus-visible {
   from { opacity: 0; transform: scale(0.97) translateY(8px); }
   to { opacity: 1; transform: scale(1) translateY(0); }
 }
+
+/* ── Touch targets (P5.3) ──
+   On phones and tablets every control is at least 44×44 CSS px (Apple HIG / WCAG 2.5.5).
+   Desktop (fine pointer) keeps the compact terminal look. */
+@media (pointer: coarse) {
+  button,
+  select,
+  [role="button"],
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="hidden"]),
+  textarea {
+    min-height: 44px;
+  }
+  button,
+  [role="button"] {
+    min-width: 44px;
+  }
+  input[type="checkbox"],
+  input[type="radio"] {
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+  }
+  /* A checkbox row is tapped through its label: make the row the 44 px target */
+  label:has(> input[type="checkbox"]),
+  label:has(> input[type="radio"]) {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+  }
+  input[type="range"] {
+    height: 44px;
+  }
+  /* iOS zooms into inputs under 16 px; the viewport forbids zoom, so keep text readable */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  textarea,
+  select {
+    font-size: max(16px, 1em);
+  }
+}
+
+/* Boss-flow shortcuts: a column on desktop, one wrapping row above the chat bar on phones */
+.pc-bossflow-chips { flex-direction: column; }
+@media (max-width: 768px) {
+  .pc-bossflow-chips { flex-direction: row; flex-wrap: wrap; right: 12px; align-items: center; }
+}
