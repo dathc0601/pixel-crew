@@ -1,7 +1,7 @@
 // Must stay the first import: exits before any files are created when run as root without --allow-root
 import "./root-guard.js";
 // Second: demo mode picks its own data dir before config.ts resolves paths
-import { DEMO_MODE, DEMO_BACKEND_ID, resolveDemoAgentScript, writeDemoScenario } from "./demo-mode.js";
+import { DEMO_MODE, DEMO_BACKEND_ID, DEMO_TEAM, resolveDemoAgentScript, writeDemoScenario } from "./demo-mode.js";
 import { registerChannel, initTransports, publishEvent, destroyTransports, reinitChannel, isChannelActive } from "./transport.js";
 import { wsChannel, setPairCode, sendToClient, revokeAllSessions } from "./ws-server.js";
 import { generatePairCode } from "./security.js";
@@ -661,77 +661,7 @@ function handleCommand(parsed: Command, meta: CommandMeta) {
       break;
     }
     case "CREATE_TEAM": {
-      const { leadId, memberIds, backends } = parsed;
-      const allIds = [leadId, ...memberIds.filter(id => id !== leadId)];
-      console.log(`[Gateway] Creating team: lead=${leadId}, members=${memberIds.join(",")}${parsed.workDir ? ` workDir=${parsed.workDir}` : ""}`);
-
-      // Store team-level working directory override
-      teamWorkDir = parsed.workDir || undefined;
-
-      // Clean up stale team agents from a previous team (no longer valid)
-      // Keep solo agents intact — they are independent
-      const newTeamDefNames = new Set(allIds.map(id => agentDefs.find(a => a.id === id)?.name).filter(Boolean));
-      for (const agent of orc.getAllAgents()) {
-        if (agent.teamId && !agent.isTeamLead) {
-          // Remove old team members (will be re-created below)
-          console.log(`[Gateway] Removing old team agent "${agent.name}" before team creation`);
-          orc.removeAgent(agent.agentId);
-        }
-      }
-
-      let leadAgentId: string | null = null;
-      const teamId = `team-${nanoid(6)}`;
-
-      // Auto-name pool for team members without short names
-      const autoNames = ["Alex", "Mia", "Leo", "Nova", "Luna", "Rex", "Kai", "Zoe", "Jay", "Sam"];
-      const usedNames = new Set<string>();
-
-      for (const defId of allIds) {
-        const def = agentDefs.find(a => a.id === defId);
-        if (!def) { console.log(`[Gateway] Agent def not found: ${defId}`); continue; }
-        const agentId = `agent-${nanoid(6)}`;
-        const backendId = backends?.[defId] ?? config.defaultBackend;
-
-        if (defId === leadId) {
-          leadAgentId = agentId;
-          orc.setTeamLead(agentId);
-        }
-
-        // Use def.name if it's a short human name; otherwise auto-assign
-        let agentName = def.name;
-        const isShortName = agentName.length <= 10 && !agentName.includes(" ");
-        if (!isShortName || usedNames.has(agentName.toLowerCase())) {
-          agentName = autoNames.find(n => !usedNames.has(n.toLowerCase())) ?? `Agent${usedNames.size + 1}`;
-        }
-        usedNames.add(agentName.toLowerCase());
-
-        orc.createAgent({
-          agentId,
-          name: agentName,
-          role: def.skills ? `${def.role} — ${def.skills}` : def.role,
-          personality: def.personality,
-          backend: backendId,
-          palette: def.palette,
-          teamId,
-        });
-      }
-
-      if (leadAgentId) {
-        const leadDef = agentDefs.find(a => a.id === leadId);
-        const teamChatEvt = {
-          type: "TEAM_CHAT" as const,
-          fromAgentId: leadAgentId,
-          message: `Team created! ${leadDef?.name ?? "Lead"} is the Team Lead with ${memberIds.length} team members.`,
-          messageType: "status" as const,
-          timestamp: Date.now(),
-        };
-        bufferEvent(teamChatEvt);
-        publishEvent(teamChatEvt);
-
-        // P1.7: no automatic "greet" run. Nothing spends tokens until the Boss assigns work.
-        orc.setTeamPhase(teamId, "create", leadAgentId);
-      }
-      persistTeamState();
+      createTeam(parsed.leadId, parsed.memberIds, parsed.backends, parsed.workDir);
       break;
     }
     case "BOSS_ASSIGN": {
@@ -1299,6 +1229,83 @@ function handleCommand(parsed: Command, meta: CommandMeta) {
   }
 }
 
+/**
+ * Hire a team from agent definitions (CREATE_TEAM, and the demo team at startup).
+ * Old team members are replaced; nothing runs until the Boss assigns work (P1.7).
+ */
+function createTeam(leadId: string, memberIds: readonly string[], backends?: Record<string, string>, workDir?: string): void {
+  const allIds = [leadId, ...memberIds.filter(id => id !== leadId)];
+  console.log(`[Gateway] Creating team: lead=${leadId}, members=${memberIds.join(",")}${workDir ? ` workDir=${workDir}` : ""}`);
+
+  // Store team-level working directory override
+  teamWorkDir = workDir || undefined;
+
+  // Clean up stale team agents from a previous team (no longer valid)
+  // Keep solo agents intact — they are independent
+  const newTeamDefNames = new Set(allIds.map(id => agentDefs.find(a => a.id === id)?.name).filter(Boolean));
+  for (const agent of orc.getAllAgents()) {
+    if (agent.teamId && !agent.isTeamLead) {
+      // Remove old team members (will be re-created below)
+      console.log(`[Gateway] Removing old team agent "${agent.name}" before team creation`);
+      orc.removeAgent(agent.agentId);
+    }
+  }
+
+  let leadAgentId: string | null = null;
+  const teamId = `team-${nanoid(6)}`;
+
+  // Auto-name pool for team members without short names
+  const autoNames = ["Alex", "Mia", "Leo", "Nova", "Luna", "Rex", "Kai", "Zoe", "Jay", "Sam"];
+  const usedNames = new Set<string>();
+
+  for (const defId of allIds) {
+    const def = agentDefs.find(a => a.id === defId);
+    if (!def) { console.log(`[Gateway] Agent def not found: ${defId}`); continue; }
+    const agentId = `agent-${nanoid(6)}`;
+    const backendId = backends?.[defId] ?? config.defaultBackend;
+
+    if (defId === leadId) {
+      leadAgentId = agentId;
+      orc.setTeamLead(agentId);
+    }
+
+    // Use def.name if it's a short human name; otherwise auto-assign
+    let agentName = def.name;
+    const isShortName = agentName.length <= 10 && !agentName.includes(" ");
+    if (!isShortName || usedNames.has(agentName.toLowerCase())) {
+      agentName = autoNames.find(n => !usedNames.has(n.toLowerCase())) ?? `Agent${usedNames.size + 1}`;
+    }
+    usedNames.add(agentName.toLowerCase());
+
+    orc.createAgent({
+      agentId,
+      name: agentName,
+      role: def.skills ? `${def.role} — ${def.skills}` : def.role,
+      personality: def.personality,
+      backend: backendId,
+      palette: def.palette,
+      teamId,
+    });
+  }
+
+  if (leadAgentId) {
+    const leadDef = agentDefs.find(a => a.id === leadId);
+    const teamChatEvt = {
+      type: "TEAM_CHAT" as const,
+      fromAgentId: leadAgentId,
+      message: `Team created! ${leadDef?.name ?? "Lead"} is the Team Lead with ${memberIds.length} team members.`,
+      messageType: "status" as const,
+      timestamp: Date.now(),
+    };
+    bufferEvent(teamChatEvt);
+    publishEvent(teamChatEvt);
+
+    // P1.7: no automatic "greet" run. Nothing spends tokens until the Boss assigns work.
+    orc.setTeamPhase(teamId, "create", leadAgentId);
+  }
+  persistTeamState();
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -1463,6 +1470,12 @@ async function main() {
     console.log(`[Gateway] Restoring ${savedState.workItems.length} work item(s)`);
     const held = orc.restoreWorkItems(savedState.workItems);
     if (held > 0) console.log(`[Gateway] ${held} work item(s) are held: nothing starts until the owner sends RESUME_POOL`);
+  }
+
+  // Demo mode: an empty office gets a ready-made team (1 Lead, 4 devs, 1 reviewer)
+  if (DEMO_MODE && !orc.getAllAgents().some((a) => a.teamId)) {
+    console.log("[Gateway] Demo mode: hiring the demo team");
+    createTeam(DEMO_TEAM.lead, DEMO_TEAM.members);
   }
 
   // Re-apply global autoMerge setting to all agents (overrides stale per-agent values

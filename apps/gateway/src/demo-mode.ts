@@ -42,31 +42,47 @@ interface DemoRule {
 }
 
 /**
+ * The team demo mode hires into an empty office (agent definition ids from
+ * DEFAULT_AGENT_DEFS): the Lead, four developers and the reviewer.
+ */
+export const DEMO_TEAM = {
+  lead: "marcus",
+  members: ["rex", "alex", "mia", "leo", "sophie"],
+} as const;
+
+/** The demo team's reviewer, by name: the Lead's script hands finished work to them. */
+const DEMO_REVIEWER_NAME = "Sophie";
+
+/**
  * The script every demo agent follows (fake-agent.mjs; first matching rule wins).
- * The Lead splits each Boss task into three TASK: lines, so with two devs the
- * third one waits on the task board. Devs "work" for a few seconds.
+ * The Lead splits each Boss task into four TASK: lines, so the Dispatcher fans them out
+ * to four different idle devs. Devs "work" for a few seconds and walk their result back;
+ * the Lead then asks the reviewer for a review, and the reviewer's PASS closes the task.
  */
 export const DEMO_SCENARIO: { rules: DemoRule[]; default: Omit<DemoRule, "match"> } = {
   rules: [
     // Lead doing a queued sub-task itself (lead.selfWork policy)
     { match: "doing this task yourself", text: ["STATUS: done", "SUMMARY: (demo) The Lead finished this one personally."], delayMs: 3500, jitterMs: 1500 },
-    // Lead reading results: no new delegation, so the Boss task finishes when the pool is empty
-    { match: "New result from", text: "FINAL SUMMARY: (demo) The team delivered every part of the Boss's task.", delayMs: 1200 },
+    // Lead reading the reviewer's verdict: done, no new delegation
+    { match: `New result from ${DEMO_REVIEWER_NAME}`, text: "FINAL SUMMARY: (demo) Reviewed and approved. The team delivered every part of the Boss's task.", delayMs: 1200 },
+    // Lead reading dev results: hand the work to the reviewer
+    { match: "New result from", text: `@${DEMO_REVIEWER_NAME}: Please review what the team just delivered.`, delayMs: 1200 },
     // Lead receiving a Boss task
     {
       match: "The Boss assigned you a task",
       text: [
-        "Got it, Boss. I'll split this into three parts:",
+        "Got it, Boss. I'll split this into four parts:",
         "TASK[ui]: Sketch the screens and layout",
         "TASK: Build the core feature",
+        "TASK: Wire up the data and the API",
         "TASK: Write tests and polish the details",
       ],
       delayMs: 1500,
     },
     // Reviewer
-    { match: "VERDICT", text: ["VERDICT: PASS", "SUMMARY: (demo) Reviewed, looks good."], delayMs: 3000 },
-    // Developers (first run: "Your name is …"; resumed runs: "[Assigned by …]")
-    { match: "Your name is|Assigned by", text: ["STATUS: done", "SUMMARY: (demo) Finished my part."], delayMs: 5000, jitterMs: 3000 },
+    { match: `VERDICT|Your name is ${DEMO_REVIEWER_NAME}|You are ${DEMO_REVIEWER_NAME} \\(`, text: ["VERDICT: PASS", "SUMMARY: (demo) Reviewed, looks good."], delayMs: 3000 },
+    // Developers (first run: "Your name is …"; later runs: "[Context reminder] You are …" / "[Assigned by …]")
+    { match: "Your name is|Assigned by|Context reminder", text: ["STATUS: done", "SUMMARY: (demo) Finished my part."], delayMs: 6000, jitterMs: 4000 },
   ],
   default: { text: "(demo) I am a scripted demo agent. Click the Boss to assign the team a task.", delayMs: 800 },
 };
