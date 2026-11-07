@@ -11,6 +11,7 @@ import {
   LAMP_SPRITE,
 } from '../sprites/spriteData'
 import { TILESET_FURNITURE, type TilesetFurnitureEntry } from '../sprites/assetLoader'
+import * as Art from '../sprites/officeArt'
 
 export type FurnitureCategory = 'desks' | 'chairs' | 'storage' | 'decor' | 'electronics' | 'wall' | 'misc'
 
@@ -30,8 +31,42 @@ const FALLBACK_CATALOG: CatalogEntryWithCategory[] = [
   { type: FurnitureType.LAMP,       label: 'Lamp',       footprintW: 1, footprintH: 1, sprite: LAMP_SPRITE,         isDesk: false, category: 'decor' },
 ]
 
-/** Full catalog: fallback entries + any tileset entries registered at runtime */
-export const FURNITURE_CATALOG: CatalogEntryWithCategory[] = [...FALLBACK_CATALOG]
+/** Draw `top` over `base` at (dx, dy): composite sprites such as the coffee counter. */
+function overlay(base: SpriteData, top: SpriteData, dx: number, dy: number): SpriteData {
+  const out = base.map((row) => [...row])
+  top.forEach((row, y) => row.forEach((c, x) => {
+    if (c && out[y + dy] && x + dx < out[y + dy].length) out[y + dy][x + dx] = c
+  }))
+  return out
+}
+
+/** Pixel Crew's own office art (Phase 3, sprites/officeArt.ts). Monitors switch on for working agents. */
+const OFFICE_ART_CATALOG: CatalogEntryWithCategory[] = [
+  { type: 'boss-desk',      label: 'Boss Desk',      footprintW: 3, footprintH: 2, sprite: Art.BOSS_DESK_SPRITE,      isDesk: true,  category: 'desks' },
+  { type: 'boss-chair',     label: 'Boss Chair',     footprintW: 1, footprintH: 1, sprite: Art.BOSS_CHAIR_SPRITE,     isDesk: false, category: 'chairs' },
+  { type: 'office-chair',   label: 'Office Chair',   footprintW: 1, footprintH: 1, sprite: Art.OFFICE_CHAIR_SPRITE,   isDesk: false, category: 'chairs' },
+  { type: 'armchair',       label: 'Armchair',       footprintW: 1, footprintH: 1, sprite: Art.ARMCHAIR_SPRITE,       isDesk: false, category: 'chairs' },
+  { type: 'monitor',        label: 'Monitor',        footprintW: 2, footprintH: 1, sprite: Art.MONITOR_OFF_SPRITE,    isDesk: false, category: 'electronics', canPlaceOnSurfaces: true },
+  { type: 'monitor-on',     label: 'Monitor (on)',   footprintW: 2, footprintH: 1, sprite: Art.MONITOR_ON_SPRITE,     isDesk: false, category: 'electronics', canPlaceOnSurfaces: true },
+  { type: 'monitor-back',   label: 'Monitor (back)', footprintW: 2, footprintH: 1, sprite: Art.MONITOR_BACK_SPRITE,   isDesk: false, category: 'electronics', canPlaceOnSurfaces: true },
+  { type: 'cabinet',        label: 'Filing Cabinet', footprintW: 1, footprintH: 2, sprite: Art.CABINET_SPRITE,        isDesk: false, category: 'storage', backgroundTiles: 1 },
+  { type: 'locker',         label: 'Locker',         footprintW: 1, footprintH: 2, sprite: Art.LOCKER_SPRITE,         isDesk: false, category: 'storage', backgroundTiles: 1 },
+  { type: 'fridge',         label: 'Fridge',         footprintW: 1, footprintH: 2, sprite: Art.FRIDGE_SPRITE,         isDesk: false, category: 'storage' },
+  { type: 'coffee-counter', label: 'Coffee Counter', footprintW: 2, footprintH: 2, sprite: overlay(Art.COUNTER_SPRITE, Art.COFFEE_MACHINE_SPRITE, 2, 1), isDesk: false, category: 'misc' },
+  { type: 'round-table',    label: 'Round Table',    footprintW: 2, footprintH: 2, sprite: Art.ROUND_TABLE_SPRITE,    isDesk: false, category: 'misc' },
+  { type: 'paper-stack',    label: 'Documents',      footprintW: 1, footprintH: 1, sprite: Art.PAPER_STACK_SPRITE,    isDesk: false, category: 'decor', canPlaceOnSurfaces: true },
+  { type: 'doc-tray',       label: 'Document Tray',  footprintW: 1, footprintH: 1, sprite: Art.DOC_TRAY_SPRITE,       isDesk: false, category: 'decor', canPlaceOnSurfaces: true },
+  { type: 'plant-tall',     label: 'Tall Plant',     footprintW: 1, footprintH: 2, sprite: Art.PLANT_TALL_SPRITE,     isDesk: false, category: 'decor', backgroundTiles: 1 },
+  { type: 'rug',            label: 'Rug',            footprintW: 4, footprintH: 3, sprite: Art.RUG_SPRITE,            isDesk: false, category: 'decor', backgroundTiles: 3 },
+  { type: 'window',         label: 'Window',         footprintW: 2, footprintH: 2, sprite: Art.WINDOW_SPRITE,         isDesk: false, category: 'wall', canPlaceOnWalls: true },
+  { type: 'task-board',     label: 'Task Board',     footprintW: 3, footprintH: 2, sprite: Art.TASK_BOARD_SPRITE,     isDesk: false, category: 'wall', canPlaceOnWalls: true },
+  { type: 'door-v',         label: 'Door (side wall)',  footprintW: 1, footprintH: 1, sprite: Art.DOOR_V_SPRITE,      isDesk: false, category: 'misc', backgroundTiles: 1 },
+  { type: 'door-jamb',      label: 'Door Jamb (blocks)', footprintW: 1, footprintH: 1, sprite: Art.EMPTY_TILE_SPRITE, isDesk: false, category: 'misc' },
+  { type: 'door-h',         label: 'Door (front wall)', footprintW: 1, footprintH: 2, sprite: Art.DOOR_H_SPRITE,      isDesk: false, category: 'misc', backgroundTiles: 2, canPlaceOnWalls: true },
+]
+
+/** Full catalog: fallback entries + office art + any tileset entries registered at runtime */
+export const FURNITURE_CATALOG: CatalogEntryWithCategory[] = [...FALLBACK_CATALOG, ...OFFICE_ART_CATALOG]
 
 export const FURNITURE_CATEGORIES: Array<{ id: FurnitureCategory; label: string }> = [
   { id: 'desks', label: 'Desks' },
@@ -54,6 +89,15 @@ const rotationGroups = new Map<string, RotationGroup>()
 const stateGroups = new Map<string, string>()
 const offToOn = new Map<string, string>()
 const onToOff = new Map<string, string>()
+
+/** An on/off furniture pair: the "on" one shows while an agent works at the desk. */
+function registerStatePair(offId: string, onId: string): void {
+  stateGroups.set(onId, offId)
+  stateGroups.set(offId, onId)
+  offToOn.set(offId, onId)
+  onToOff.set(onId, offId)
+}
+registerStatePair('monitor', 'monitor-on')
 
 /**
  * Register tileset-loaded sprites into the catalog.
