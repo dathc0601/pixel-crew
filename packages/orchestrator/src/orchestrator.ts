@@ -215,7 +215,9 @@ export class Orchestrator extends EventEmitter<OrchestratorEventMap> {
     }
     // Its pooled work goes back to the queue for someone else
     this.dispatcher.releaseAgent(agentId);
-    this.cancelTask(agentId);
+    // Only a running or queued run needs cancelling (an idle agent would get a stray
+    // "task cancelled" message, e.g. when an attached session leaves the team)
+    if (session && (session.activeTaskId || session.isBusy)) this.cancelTask(agentId);
     this.delegationRouter.clearAgent(agentId);
     this.agentManager.delete(agentId);
     this.emitEvent({ type: "agent:fired", agentId });
