@@ -11,6 +11,8 @@ import { getCharacterSprite } from './characters'
 export interface BossFlowOverlays {
   taskBoard: { charId: number; count: number } | null
   subagentCues: ReadonlyMap<number, number>
+  /** The layout's wall-mounted task board in world px: queued papers are pinned on it */
+  boardRect?: { x: number; y: number; w: number; h: number } | null
   /** Receives the board's hit box in world px (null when not drawn) */
   setTaskBoardRect: (rect: { x: number; y: number; w: number; h: number } | null) => void
 }
@@ -41,6 +43,48 @@ function drawPaper(ctx: CanvasRenderingContext2D, x: number, y: number, px: numb
   ctx.fillStyle = '#9aa0a6'
   ctx.fillRect(x + px, y + px, 2 * px, px)
   ctx.fillRect(x + px, y + 3 * px, 2 * px, px)
+}
+
+/** Papers pinned on the wall board (cork area of TASK_BOARD_SPRITE: x 4..44, y 8..26), then a count badge. */
+function drawPinnedPapers(
+  ctx: CanvasRenderingContext2D,
+  rect: { x: number; y: number; w: number; h: number },
+  count: number,
+  offsetX: number,
+  offsetY: number,
+  zoom: number,
+): void {
+  const u = Math.max(1, zoom)
+  const bx = Math.round(offsetX + rect.x * zoom)
+  const by = Math.round(offsetY + rect.y * zoom)
+  const shown = Math.min(count, 8)
+  for (let i = 0; i < shown; i++) {
+    const col = i % 4
+    const row = Math.floor(i / 4)
+    const px = bx + (6 + col * 9) * u
+    const py = by + (9 + row * 8) * u
+    ctx.fillStyle = '#3a3a3a'
+    ctx.fillRect(px - u, py - u, 8 * u, 8 * u)
+    ctx.fillStyle = i % 3 === 1 ? '#fff3a8' : '#fbfbf2'
+    ctx.fillRect(px, py, 6 * u, 6 * u)
+    ctx.fillStyle = '#9aa0a6'
+    ctx.fillRect(px + u, py + 2 * u, 4 * u, u)
+    ctx.fillRect(px + u, py + 4 * u, 3 * u, u)
+    ctx.fillStyle = '#e8463c'
+    ctx.fillRect(px + 2 * u, py - u, 2 * u, 2 * u)
+  }
+  const label = String(count)
+  ctx.font = `bold ${Math.max(7, Math.round(5 * u))}px monospace`
+  ctx.textBaseline = 'top'
+  const tw = Math.ceil(ctx.measureText(label).width)
+  const badgeX = bx + (rect.w - 4) * u - tw
+  const badgeY = by + 2 * u
+  ctx.fillStyle = '#222'
+  ctx.fillRect(badgeX - 2 * u, badgeY - u, tw + 4 * u, 7 * u)
+  ctx.fillStyle = '#e8463c'
+  ctx.fillRect(badgeX - u, badgeY, tw + 2 * u, 5 * u)
+  ctx.fillStyle = '#fff'
+  ctx.fillText(label, badgeX, badgeY)
 }
 
 export function renderBossFlowOverlays(
@@ -99,8 +143,18 @@ export function renderBossFlowOverlays(
     ctx.fillText(label, mx + mini.width / 2 - tw / 2, my - 5 * px)
   }
 
-  // Queue board: a cork board beside the Lead holding one paper per queued item
+  // Queue board, layouts with a task board on the wall: one pinned paper per queued item.
+  // The board is always clickable (the queue dialog), even when nothing waits.
   const board = overlays.taskBoard
+  const wall = overlays.boardRect
+  if (wall) {
+    overlays.setTaskBoardRect(wall)
+    if (board && board.count > 0) drawPinnedPapers(ctx, wall, board.count, offsetX, offsetY, zoom)
+    ctx.restore()
+    return
+  }
+
+  // Otherwise: a cork board beside the Lead holding one paper per queued item
   const lead = board ? characters.find((c) => c.id === board.charId) : undefined
   if (board && lead && !lead.matrixEffect) {
     const W = 14

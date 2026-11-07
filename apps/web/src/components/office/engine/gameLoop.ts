@@ -31,6 +31,9 @@ declare global {
   }
 }
 
+/** Sleep after a single clean frame when the next timer is at least this far away */
+const EARLY_SLEEP_MIN_MS = 40
+
 /** Longest gap a timer wake-up may cover in one update (timers only; nothing walks while asleep) */
 const MAX_SLEEP_DELTA_SEC = 600
 
@@ -92,9 +95,12 @@ export function startGameLoop(
       idleFrames++
     }
 
-    // Sleep when idle — events will wake us via wake()
-    if (idleFrames >= IDLE_THRESHOLD) {
-      const wakeIn = callbacks.nextWakeMs?.() ?? null
+    // Sleep when idle — events will wake us via wake(). A known timer far enough away
+    // (typing frames, wander pauses) lets the loop sleep right after one clean frame, so a
+    // typing dev costs about one tick per typing frame instead of a burst of rAF ticks.
+    const timerMs = idleFrames > 0 ? (callbacks.nextWakeMs?.() ?? null) : null
+    if (idleFrames >= IDLE_THRESHOLD || (timerMs !== null && timerMs > EARLY_SLEEP_MIN_MS)) {
+      const wakeIn = timerMs ?? callbacks.nextWakeMs?.() ?? null
       if (wakeIn !== null && wakeIn <= 0) {
         // Something needs per-frame updates without drawing (rare); keep ticking
         rafId = requestAnimationFrame(frame)

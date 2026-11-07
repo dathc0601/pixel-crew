@@ -1,8 +1,11 @@
-import { TileType, TILE_SIZE, CharacterState } from '../types'
+import { TileType, TILE_SIZE, CharacterState, Direction } from '../types'
 import type { TileType as TileTypeVal, FurnitureInstance, Character, SpriteData, FloorColor } from '../types'
 import { getCachedSprite, getOutlineSprite } from '../sprites/spriteCache'
 import { getCharacterSprites, BUBBLE_PERMISSION_SPRITE, BUBBLE_WORKING_SPRITE, BUBBLE_WAITING_SPRITE } from '../sprites/spriteData'
-import { getCharacterSprite } from './characters'
+import { getCharacterSprite, isSeatedIdle } from './characters'
+import { getBossSprites } from '../sprites/bossLook'
+import { renderZoneTint, zoneLabelDrawables } from './zoneRenderer'
+import type { OfficeLayout } from '../types'
 import { renderMatrixEffect } from './matrixEffect'
 import { renderBossFlowOverlays, type BossFlowOverlays } from './bossFlowRenderer'
 import { getColorizedFloorSprite, hasFloorSprites, WALL_COLOR } from '../floorTiles'
@@ -94,7 +97,9 @@ export function renderTileGrid(
         } else {
           ctx.fillStyle = FALLBACK_FLOOR_COLOR
         }
-        ctx.fillRect(offsetX + c * s, offsetY + r * s, s, s)
+        const x0 = Math.round(offsetX + c * s)
+        const y0 = Math.round(offsetY + r * s)
+        ctx.fillRect(x0, y0, Math.round(offsetX + (c + 1) * s) - x0, Math.round(offsetY + (r + 1) * s) - y0)
         continue
       }
 
@@ -102,7 +107,10 @@ export function renderTileGrid(
       const color = tileColors?.[colorIdx] ?? { h: 0, s: 0, b: 0, c: 0 }
       const sprite = getColorizedFloorSprite(tile, color)
       const cached = getCachedSprite(sprite, zoom)
-      ctx.drawImage(cached, offsetX + c * s, offsetY + r * s)
+      // Snap to whole device pixels so fractional zooms leave no seams between tiles
+      const x0 = Math.round(offsetX + c * s)
+      const y0 = Math.round(offsetY + r * s)
+      ctx.drawImage(cached, x0, y0, Math.round(offsetX + (c + 1) * s) - x0, Math.round(offsetY + (r + 1) * s) - y0)
     }
   }
 }
@@ -122,8 +130,9 @@ export function renderScene(
   selectedAgentId: number | null,
   hoveredAgentId: number | null,
   characterScale = 1,
+  extra?: ZDrawable[],
 ): void {
-  const drawables: ZDrawable[] = []
+  const drawables: ZDrawable[] = extra ? [...extra] : []
   const charZoom = zoom * characterScale
 
   // Furniture
@@ -141,11 +150,13 @@ export function renderScene(
 
   // Characters
   for (const ch of characters) {
-    const sprites = getCharacterSprites(ch.palette, ch.hueShift)
+    const sprites = ch.isBoss ? getBossSprites(ch.palette) : getCharacterSprites(ch.palette, ch.hueShift)
     const spriteData = getCharacterSprite(ch, sprites)
     if (!spriteData) continue
     const cached = getCachedSprite(spriteData, charZoom)
-    const sittingOffset = ch.state === CharacterState.TYPE ? CHARACTER_SITTING_OFFSET_PX : 0
+    // Seated idle agents lean back from the desk they face
+    const lean = isSeatedIdle(ch) ? (ch.dir === Direction.UP ? 2 : ch.dir === Direction.DOWN ? -1 : 0) : 0
+    const sittingOffset = ch.state === CharacterState.TYPE ? CHARACTER_SITTING_OFFSET_PX + lean : 0
     const drawX = Math.round(offsetX + ch.x * zoom - cached.width / 2)
     const drawY = Math.round(offsetY + (ch.y + sittingOffset) * zoom - cached.height)
 
@@ -622,6 +633,7 @@ export function renderFrame(
   backgroundImage?: HTMLImageElement | null,
   characterScale?: number,
   bossFlow?: BossFlowOverlays,
+  zoneLayout?: OfficeLayout,
 ): { offsetX: number; offsetY: number } {
   const charScale = characterScale ?? 1
   // Clear
@@ -647,6 +659,8 @@ export function renderFrame(
   // Draw tiles (skip floor rendering when background image is present)
   if (!backgroundImage) {
     renderTileGrid(ctx, tileMap, offsetX, offsetY, zoom, tileColors, layoutCols)
+    // Zone tint while editing (room names are z-sorted with the scene below)
+    if (zoneLayout && editor) renderZoneTint(ctx, zoneLayout, offsetX, offsetY, zoom)
   }
 
   // Build wall instances for z-sorting (skip when background image provides wall visuals)
@@ -658,7 +672,8 @@ export function renderFrame(
     : furniture
 
   // Draw walls + furniture + characters (z-sorted)
-  renderScene(ctx, allFurniture, characters, offsetX, offsetY, zoom, selectedAgentId, hoveredAgentId, charScale)
+  const labels = zoneLayout && !backgroundImage ? zoneLabelDrawables(zoneLayout, offsetX, offsetY, zoom) : undefined
+  renderScene(ctx, allFurniture, characters, offsetX, offsetY, zoom, selectedAgentId, hoveredAgentId, charScale, labels)
 
   // Boss crown, hand-off papers, queue board, subagent cue
   if (bossFlow) renderBossFlowOverlays(ctx, characters, offsetX, offsetY, zoom, charScale, bossFlow)

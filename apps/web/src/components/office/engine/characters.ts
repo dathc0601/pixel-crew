@@ -345,11 +345,19 @@ export function updateCharacter(
   }
 }
 
+/** Seated and idle (not working): drawn leaning back a little */
+export function isSeatedIdle(ch: Character): boolean {
+  return ch.state === CharacterState.TYPE && !ch.isActive
+}
+
 /** Get the correct sprite frame for a character's current state and direction */
 export function getCharacterSprite(ch: Character, sprites: CharacterSprites | null): SpriteData | null {
   if (!sprites) return null
   switch (ch.state) {
     case CharacterState.TYPE:
+      // Seated but not working: a still seated pose, leaning back (the renderer adds the
+      // lean, the monitor stays off); only working agents type, so idle desks cost no frames
+      if (!ch.isActive) return sprites.typing[ch.dir][0]
       if (isReadingTool(ch.currentTool)) {
         return sprites.reading[ch.dir][ch.frame % 2]
       }
