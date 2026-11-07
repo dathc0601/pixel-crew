@@ -7,13 +7,19 @@ export interface ConnectionInfo {
   wsUrl?: string;
   role?: "owner" | "collaborator" | "spectator";
   sessionToken?: string;
+  /**
+   * Paired from another device (QR link or pair code): the token belongs to this browser
+   * and the gateway is reached at wsUrl. Such connections never probe localhost /connect.
+   */
+  paired?: boolean;
 }
 
 export function saveConnection(info: ConnectionInfo) {
   // Use sessionStorage so each tab keeps its own identity (owner vs collaborator vs spectator).
   // Fall back to localStorage for the owner connection so it persists across new tabs.
   sessionStorage.setItem(CONNECTION_KEY, JSON.stringify(info));
-  if (info.role === "owner" || !info.role) {
+  // Paired phones keep any role across restarts: iOS drops sessionStorage with the tab
+  if (info.role === "owner" || !info.role || info.paired) {
     localStorage.setItem(CONNECTION_KEY, JSON.stringify(info));
   }
 }

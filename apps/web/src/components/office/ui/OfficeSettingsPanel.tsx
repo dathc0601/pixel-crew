@@ -10,7 +10,8 @@ import { sendCommand } from "@/lib/connection";
 import { useBossFlowStore } from "@/store/boss-flow-store";
 import TermModal from "./primitives/TermModal";
 import TermButton from "./primitives/TermButton";
-import { TERM_DIM, TERM_TEXT, TERM_SEM_RED, TERM_SEM_GREEN, TERM_SEM_YELLOW, TERM_SURFACE, TERM_BORDER, TERM_TEXT_BRIGHT } from "./termTheme";
+import DevicesSection from "./DevicesSection";
+import { TERM_DIM, TERM_TEXT, TERM_SEM_RED, TERM_SEM_YELLOW, TERM_SURFACE, TERM_BORDER, TERM_TEXT_BRIGHT } from "./termTheme";
 
 type Patch = Record<string, unknown>;
 
@@ -66,7 +67,6 @@ export default function OfficeSettingsPanel({ open, onClose }: { open: boolean; 
   const config = useBossFlowStore((s) => s.officeConfig);
   const error = useBossFlowStore((s) => s.officeConfigError);
   const fileError = useBossFlowStore((s) => s.officeConfigFileError);
-  const revoked = useBossFlowStore((s) => s.revokedSessions);
   const cfg = config ?? DEFAULT_OFFICE_CONFIG;
   const D = DEFAULT_OFFICE_CONFIG;
 
@@ -75,7 +75,6 @@ export default function OfficeSettingsPanel({ open, onClose }: { open: boolean; 
   const [waitDraft, setWaitDraft] = useState(String(Math.round(cfg.lead.waitMs / 1000)));
   const editing = useRef<{ duration: boolean; wait: boolean }>({ duration: false, wait: false });
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [confirmRevoke, setConfirmRevoke] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -215,25 +214,7 @@ export default function OfficeSettingsPanel({ open, onClose }: { open: boolean; 
           )}
         </Field>
 
-        <div style={{ borderTop: `1px solid ${TERM_BORDER}`, paddingTop: 12, display: "flex", flexDirection: "column", gap: 6 }}>
-          <div style={{ color: TERM_TEXT, fontSize: 12 }}>Paired devices</div>
-          <div style={{ color: TERM_DIM, fontSize: 11 }}>Sign out every other browser, phone and share link. This one stays connected.</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            {confirmRevoke ? (
-              <>
-                <TermButton variant="danger" onClick={() => { sendCommand({ type: "REVOKE_SESSIONS" }); setConfirmRevoke(false); }}>Yes, revoke all</TermButton>
-                <TermButton variant="dim" onClick={() => setConfirmRevoke(false)}>Keep them</TermButton>
-              </>
-            ) : (
-              <TermButton variant="danger" onClick={() => setConfirmRevoke(true)}>Revoke all devices</TermButton>
-            )}
-            {revoked !== null && (
-              <span role="status" style={{ color: TERM_SEM_GREEN, fontSize: 11 }}>
-                Revoked {revoked} {revoked === 1 ? "session" : "sessions"}.
-              </span>
-            )}
-          </div>
-        </div>
+        <DevicesSection />
       </div>
     </TermModal>
   );

@@ -65,8 +65,14 @@ function doConnect() {
         console.log("[WS] AUTH_FAILED — clearing connection and redirecting to /pair");
         cleanup();
         currentUrl = null;
-        const { clearConnection } = require("@/lib/storage");
+        const { clearConnection, getConnection } = require("@/lib/storage");
+        const wasPaired = !!getConnection()?.paired;
         clearConnection();
+        // A paired device (phone) was revoked or expired: the pair page says so instead of
+        // quietly getting a new local session. Local browsers just reconnect via /connect.
+        if (wasPaired) {
+          try { sessionStorage.setItem("pixel-crew-signed-out", "1"); } catch { /* private mode */ }
+        }
         window.location.href = "/pair";
         return;
       }

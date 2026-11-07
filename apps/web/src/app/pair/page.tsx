@@ -25,12 +25,53 @@ async function connectToPort(port: number): Promise<boolean> {
   return true;
 }
 
+/** `#<token>` from a QR / pairing link: 22 base64url characters (128 bits). */
+function pairTokenFromHash(): string | null {
+  if (typeof window === "undefined") return null;
+  const m = window.location.hash.match(/^#([A-Za-z0-9_-]{22})$/);
+  return m ? m[1] : null;
+}
+
+/**
+ * Trade a one-time link token for this device's session (P5.4). The page was opened from
+ * the gateway itself, so its origin is the gateway address the phone can reach.
+ */
+async function exchangePairToken(token: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  // Drop the token from the address bar and history right away: it is a one-time secret
+  window.history.replaceState(null, "", window.location.pathname);
+  // Production: the gateway serves this page. Dev: Next serves it and the gateway is on 9099.
+  const isDev = window.location.port === "3000" || window.location.port === "3002";
+  const gatewayOrigin = isDev ? `${window.location.protocol}//${window.location.hostname}:9099` : window.location.origin;
+  try {
+    const res = await fetch(`${gatewayOrigin}/pair/exchange`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: data.error ?? "Pairing failed. Make a new QR code and try again." };
+    const { saveConnection } = await import("@/lib/storage");
+    saveConnection({
+      mode: "ws",
+      machineId: data.machineId,
+      gatewayId: data.gatewayId,
+      wsUrl: gatewayOrigin.replace(/^http/, "ws"),
+      role: data.role,
+      sessionToken: data.sessionToken,
+      paired: true,
+    });
+    return { ok: true };
+  } catch {
+    return { ok: false, error: "Cannot reach the gateway. Check that this phone is on the same network (or tailnet) and try a new QR code." };
+  }
+}
+
 export default function PairPage() {
   const [gateway, setGateway] = useState("");
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState<"connecting" | "failed" | "remote">("connecting");
+  const [status, setStatus] = useState<"connecting" | "failed" | "remote" | "signedout">("connecting");
   const router = useRouter();
 
   // ── Tauri (production): get port from Rust via command + listen fallback ──
@@ -136,6 +177,28 @@ export default function PairPage() {
 
     const run = async () => {
       const { getConnection, clearConnection } = require("@/lib/storage");
+
+      // Opened from a QR code / pairing link: pair this device, nothing else
+      const pairToken = pairTokenFromHash();
+      if (pairToken) {
+        const result = await exchangePairToken(pairToken);
+        if (result.ok) {
+          router.push("/office");
+        } else {
+          setError(result.error);
+          setStatus("signedout");
+        }
+        return;
+      }
+
+      // Revoked or expired on another device's request: say so instead of probing localhost
+      let signedOut = false;
+      try { signedOut = sessionStorage.getItem("pixel-crew-signed-out") === "1"; sessionStorage.removeItem("pixel-crew-signed-out"); } catch { /* private mode */ }
+      if (signedOut && !isTauri()) {
+        setStatus("signedout");
+        return;
+      }
+
       const conn = getConnection();
 
       // Tauri: reject cached connections to wrong gateway and wipe stale UI state
@@ -201,9 +264,11 @@ export default function PairPage() {
       saveConnection({
         mode: data.hasAbly ? "ably" : "ws",
         machineId: data.machineId,
-        wsUrl: data.wsUrl,
+        // The daemon only knows its loopback URL; the address typed here is the one that works
+        wsUrl: new URL(gatewayUrl).origin.replace(/^http/, "ws"),
         role: data.role ?? "owner",
         sessionToken: data.sessionToken,
+        paired: true,
       });
       router.push("/office");
     } catch {
@@ -240,6 +305,20 @@ export default function PairPage() {
               }}
             >Connect Remote</button>
           </div>
+        </div>
+      )}
+
+      {/* Signed out (device revoked or session expired), or a pairing link that did not work */}
+      {status === "signedout" && (
+        <div role="alert" style={{ textAlign: "center", marginTop: 24, maxWidth: 400 }} data-testid="pair-signed-out">
+          <p style={{ color: "#e2e8f0", fontSize: 16, marginBottom: 8 }}>{error ? "Pairing did not work" : "This device is signed out"}</p>
+          <p style={{ color: "#888", fontSize: 14, marginBottom: 20 }}>
+            {error ? "" : "The owner revoked it, or its session expired. "}Open Office settings → Paired devices on the computer running Pixel Crew and scan a new QR code.
+          </p>
+          <button
+            onClick={() => { setError(""); setStatus("remote"); }}
+            style={{ minHeight: 44, padding: "10px 24px", borderRadius: 8, border: "1px solid #444", backgroundColor: "transparent", color: "#aaa", fontSize: 14, cursor: "pointer" }}
+          >Use a pair code instead</button>
         </div>
       )}
 

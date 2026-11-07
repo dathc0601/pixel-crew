@@ -511,6 +511,10 @@ export default function OfficePage() {
       if (conn.mode === "ably") {
         return connect(conn);
       }
+      // Paired from a phone or another computer: /connect is local-only, so use the saved session
+      if (conn.paired && conn.wsUrl) {
+        return connect(conn);
+      }
 
       const isTauri = !!(window as any).__TAURI_INTERNALS__;
       const isDev = window.location.port === "3000" || window.location.port === "3002";

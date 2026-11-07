@@ -8,7 +8,9 @@
 
 import { create } from "zustand";
 import type {
+  DeviceInfo,
   GatewayEvent,
+  PairLinkEvent,
   HandoffEvent,
   LeadSelfWorkEvent,
   LeadSubagentStartedEvent,
@@ -37,6 +39,10 @@ interface BossFlowState {
   demo: boolean;
   /** Result of the last REVOKE_SESSIONS */
   revokedSessions: number | null;
+  /** Last one-time pairing link this owner asked for (P5.4), with when it arrived */
+  pairLink: (PairLinkEvent & { receivedAt: number }) | null;
+  /** Paired devices (owner sessions only) */
+  devices: DeviceInfo[] | null;
 }
 
 export const useBossFlowStore = create<BossFlowState>(() => ({
@@ -47,6 +53,8 @@ export const useBossFlowStore = create<BossFlowState>(() => ({
   officeConfigFileError: null,
   demo: false,
   revokedSessions: null,
+  pairLink: null,
+  devices: null,
 }));
 
 type CueListener = (cue: BossFlowCue) => void;
@@ -107,6 +115,12 @@ export function handleBossFlowEvent(event: GatewayEvent): boolean {
       return true;
     case "SESSIONS_REVOKED":
       set({ revokedSessions: event.revoked });
+      return true;
+    case "PAIR_LINK":
+      set({ pairLink: { ...event, receivedAt: Date.now() } });
+      return true;
+    case "DEVICES":
+      set({ devices: event.devices });
       return true;
     default:
       return false;
